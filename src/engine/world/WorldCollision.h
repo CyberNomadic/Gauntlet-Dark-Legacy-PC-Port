@@ -83,8 +83,10 @@ public:
 
     /** Lets these objects' triangles follow a transform: the file keeps them local to the
      * object (as level files do for anything flagged to move, animated or not), and they
-     * stand where setObjectTransform puts them, at the origin until then. */
-    void setMovingObjects(std::span<const s32> objects);
+     * stand where setObjectTransform puts them, at the origin until then.
+     * Decoded formats may add common query semantics (such as moving-floor
+     * support); ordinary native callers preserve their authored flags. */
+    void setMovingObjects(std::span<const s32> objects, u32 additionalFlags = 0);
     /** Places a moving object; others are ignored. */
     void setObjectTransform(s32 object, const Mat4& world);
     /** Whether an object's triangles block anything; all do until told otherwise. */

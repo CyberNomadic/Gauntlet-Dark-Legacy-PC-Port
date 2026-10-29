@@ -20,6 +20,7 @@
 
 #include "game/enemies/Enemies.h"
 #include "game/enemies/SwarmAggression.h"
+#include "game/level/ImportedGenerators.h"
 #include "game/level/ItemFigure.h"
 #include "game/party/PlayerMissiles.h"
 
@@ -98,6 +99,11 @@ public:
     std::optional<s32> spawn(RenderDevice& device, Enemies& enemies, s32 kind, s32 tier,
                              const Vec3& position, f32 yaw, ItemArchive* realmItems = nullptr,
                              const ItemInfo* record = nullptr);
+    /** Installs an imported native placement into the normal GDL brood and damage
+     * paths. Its level owns the artwork; only this pool slot's default art is hidden. */
+    std::optional<s32> spawnImported(RenderDevice& device, Enemies& enemies,
+                                     const ImportedGenerator& placement);
+    bool externallyPresented(s32 id) const;
     /** A boss effect leaves a tier-one generator. Its optional BOSSGEN art is borrowed. */
     bool placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchive& items, Enemies& enemies,
                    s32 kind, const Mat4& placement, const WorldCollision* collision,
@@ -107,8 +113,15 @@ public:
      * The normal level camera also limits attention distance; boss cameras omit it.
      * No view means every generator is visible. */
     void setView(std::optional<ViewVolume> view, std::optional<Vec3> attention = std::nullopt) {
-        m_sim.view = view;
-        m_sim.attention = attention;
+        m_sim.view =
+            view ? std::optional{ViewSet::of(*view, attention.value_or(Vec3{0.0f}))} : std::nullopt;
+        m_sim.attentionGate = attention.has_value();
+    }
+    /** What the party's cameras take in together, each with the point it looks at; with
+     * `attentionGate` a generator must also stand near a camera's point. */
+    void setViews(const std::optional<ViewSet>& views, bool attentionGate) {
+        m_sim.view = views;
+        m_sim.attentionGate = attentionGate;
     }
     /** Joined participants, including those waiting in the tower but not those who quit. */
     void setPlayerCount(s32 players) { m_sim.players = players; }
@@ -253,8 +266,8 @@ public:
         GeneratorScales scales;
         s32 players = 1;
         u32 specialBirth = 0;
-        std::optional<ViewVolume> view;
-        std::optional<Vec3> attention;
+        std::optional<ViewSet> view;
+        bool attentionGate = false;
         bool valid() const;
         bool operator==(const Checkpoint& /*other*/) const;
     };
@@ -302,8 +315,8 @@ private:
     bool loadBodies(RenderDevice& device, Enemies& enemies, s32 kind, ItemArchive* realmItems,
                     std::span<TextureSet* const> lenders);
     static s32 stateFor(const Generator& generator, bool destroyed);
-    SwarmAggression m_aggression;                    ///< this update's, from the simulation
-    s32 m_frenziedHuts = 0;                          ///< of the last update, for the log
+    SwarmAggression m_aggression; ///< this update's, from the simulation
+    s32 m_frenziedHuts = 0;       ///< of the last update, for the log
     s32 m_birthsTried = 0;
     s32 m_highlightedId = -1;                        ///< the developer console's selection
     const SelectionHighlight* m_highlight = nullptr; ///< how it is marked out, while drawn
@@ -335,8 +348,8 @@ private:
     struct Simulation {
         const WorldCollision* collision = nullptr;
         std::vector<Generator> generators;
-        std::optional<ViewVolume> view;
-        std::optional<Vec3> attention;
+        std::optional<ViewSet> view;
+        bool attentionGate = false; ///< a generator counts as seen only near a camera's point
         std::vector<Bodies*> bodies;
         GeneratorScales scales;
         s32 players = 1;
@@ -345,6 +358,9 @@ private:
         bool bound = false;
     } m_sim;
     std::vector<std::unique_ptr<Bodies>> m_bodyCache;
+    /** Immutable level-presentation ownership, keyed by pool lifetime rather than
+     * reusable slot index. Imported levels do not participate in rollback. */
+    std::vector<u64> m_externalBodies;
     std::vector<ItemInfo> m_records;     ///< the level's generator records, for the console
     ItemArchive* m_realmItems = nullptr; ///< what bind was given, for standings after it
     std::vector<TextureSet*> m_lenders;

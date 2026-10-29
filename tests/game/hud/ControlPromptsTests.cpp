@@ -90,4 +90,60 @@ TEST_CASE("prompt device follows input and keeps multiplayer bindings separate",
     input.setPad(0, {});
     CHECK(prompts.label(input, config, 0, "menuSelect") == "A");
 }
+
+TEST_CASE("the pointer hides while a pad plays and returns with the mouse or keyboard",
+          "[hud][prompts][cursor]") {
+    GameConfig config;
+    Input input;
+    PadSnapshot pad;
+    pad.connected = true;
+    pad.guid = "test";
+    input.setPad(0, pad);
+    input.beginPoll();
+    PromptDevices prompts;
+    prompts.update(input, config);
+    CHECK_FALSE(prompts.cursorHidden());
+    // A pad press puts the pointer away.
+    pad.buttons[static_cast<usize>(PadButton::A)] = true;
+    input.setPad(0, pad);
+    prompts.update(input, config);
+    CHECK(prompts.cursorHidden());
+    pad.buttons[static_cast<usize>(PadButton::A)] = false;
+    input.setPad(0, pad);
+    input.beginPoll();
+    prompts.update(input, config);
+    CHECK(prompts.cursorHidden()); // and it stays away while nothing else is touched
+    // A key brings it back; so does the mouse moving over the window.
+    input.beginPoll();
+    input.setKey(Key::W, true);
+    prompts.update(input, config);
+    CHECK_FALSE(prompts.cursorHidden());
+    input.beginPoll();
+    pad.buttons[static_cast<usize>(PadButton::A)] = false;
+    input.setPad(0, pad);
+    input.beginPoll();
+    pad.buttons[static_cast<usize>(PadButton::A)] = true;
+    input.setPad(0, pad);
+    prompts.update(input, config);
+    CHECK(prompts.cursorHidden());
+    input.beginPoll();
+    input.setPointer({0.2f, 0.2f, true, false});
+    prompts.update(input, config);
+    input.beginPoll();
+    input.setPointer({0.3f, 0.2f, true, false});
+    prompts.update(input, config);
+    CHECK_FALSE(prompts.cursorHidden());
+    // The keyboard assigned to a player by choice keeps the pointer whatever the pads do.
+    config.controls[0].device = "keyboard";
+    config.controls[0].customized = true;
+    input.beginPoll();
+    pad.buttons[static_cast<usize>(PadButton::A)] = false;
+    input.setPad(0, pad);
+    input.beginPoll();
+    pad.buttons[static_cast<usize>(PadButton::A)] = true;
+    input.setPad(0, pad);
+    prompts.update(input, config);
+    CHECK_FALSE(prompts.cursorHidden());
+}
+
 } // namespace

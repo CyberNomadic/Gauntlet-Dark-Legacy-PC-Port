@@ -205,6 +205,22 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                                              f32 cameraYaw, s32 ticks, f32 seconds,
                                              const WorldCollision& collision,
                                              const Events& events) {
+    const std::vector<f32> yaws(players.size(), cameraYaw);
+    return step(players, inputs, held, yaws, ticks, seconds, collision, events);
+}
+
+std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
+                                             std::span<const PlayInput> inputs, bool held,
+                                             std::span<const f32> cameraYaws, s32 ticks,
+                                             f32 seconds, const WorldCollision& collision,
+                                             const Events& events) {
+    // The yaw a player's stick is read against: theirs, else the last given, else none.
+    const auto yawOf = [&](usize index) {
+        if (index < cameraYaws.size()) {
+            return cameraYaws[index];
+        }
+        return cameraYaws.empty() ? 0.0f : cameraYaws.back();
+    };
     // Snapshot after movement, before fixture collision, preserving the camera's frame phase.
     PartyCombo::cancelInvalid(players);
     std::vector<CameraSubject> subjects;
@@ -218,6 +234,7 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
         players[i].attackStep.reset();
         actor.clearWallContacts();
         const auto player = static_cast<usize>(actor.player());
+        const f32 cameraYaw = yawOf(i);
         const bool down = players[i].life != PlayerLife::Standing;
         if (down) {
             players[i].capture.clear();
@@ -253,10 +270,12 @@ std::vector<CameraSubject> PartyMotion::step(std::span<PlayerRuntime> players,
                 const auto steering = dwarf < players.size()
                                           ? static_cast<usize>(players[dwarf].actor.player())
                                           : inputs.size();
+                // The dwarf steers against its own camera.
                 PartyCombo::ride(players, i,
                                  !held && steering < inputs.size() ? inputs[steering].move
                                                                    : MoveInput{},
-                                 cameraYaw, ticks, seconds, collision, comboEvents);
+                                 dwarf < players.size() ? yawOf(dwarf) : cameraYaw, ticks,
+                                 seconds, collision, comboEvents);
             }
             PartyCombo::animate(players, i, ticks, seconds, comboEvents);
             subjects.push_back({actor.position(), actor.followPoint()});

@@ -50,11 +50,13 @@ TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, nothing
           "[game][mechanics][aggressor]") {
     std::array<PlayerRuntime, 1> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
-    const MechanicsFacade on;
+    const MechanicsFacade on{{.aggressorMode = true}};
     CHECK(on.aggressorMode());
     CHECK(on.meterShown());
     CHECK(on.swarmAggravated());
-    CHECK(MechanicsFacade::standard().aggressorMode());
+    // Unless switched on, the mode is off: a hook handed no facade plays the original.
+    CHECK_FALSE(MechanicsFacade{}.aggressorMode());
+    CHECK_FALSE(MechanicsFacade::standard().aggressorMode());
     for (const BlowSource source : kSources) {
         CAPTURE(static_cast<int>(source));
         CHECK(on.runEffect(source, BlowOutcome::Hurt, players[0], players) == RunEffect::Nothing);
@@ -67,11 +69,11 @@ TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, nothing
     // Three seconds at D, three eighths less a grade, one and a half at S.
     CHECK(on.quietWindow(0) == StreakGrades::kLongestQuiet);
     CHECK(on.quietWindow(1) == StreakGrades::kLongestQuiet);
-    CHECK(on.quietWindow(24) == StreakGrades::kLongestQuiet);
-    CHECK(on.quietWindow(25) == Approx(2.625f));
-    CHECK(on.quietWindow(50) == Approx(2.25f));
-    CHECK(on.quietWindow(75) == Approx(1.875f));
-    CHECK(on.quietWindow(100) == StreakGrades::kShortestQuiet);
+    CHECK(on.quietWindow(74) == StreakGrades::kLongestQuiet);
+    CHECK(on.quietWindow(75) == Approx(2.625f));
+    CHECK(on.quietWindow(150) == Approx(2.25f));
+    CHECK(on.quietWindow(225) == Approx(1.875f));
+    CHECK(on.quietWindow(300) == StreakGrades::kShortestQuiet);
     CHECK(on.quietWindow(1000) == StreakGrades::kShortestQuiet);
     CHECK(StreakGrades::kLongestQuiet == MeleeStreak::kQuiet); // the longest a run survives
     MechanicsFacade switched;
@@ -85,7 +87,7 @@ TEST_CASE("kills under time stop, invulnerability or invisibility count nothing"
     std::array<PlayerRuntime, 2> players;
     players[0].actor.spawn(0, {}, nullptr, Vec3{0}, 0);
     players[1].actor.spawn(1, {}, nullptr, Vec3{0, 0, 5}, 0);
-    const MechanicsFacade on;
+    const MechanicsFacade on{{.aggressorMode = true}};
     REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Killed, players[0], players) ==
             RunEffect::Count);
     REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Killed, players[1], players) ==

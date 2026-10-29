@@ -245,7 +245,10 @@ TEST_CASE("Pojo gameplay announcements use the transformed identity without an i
     REQUIRE(sounds.voiceCount() == 1);
     std::array<f32, 2048> samples{};
     mixer.mix(samples);
-    CHECK(std::accumulate(samples.begin(), samples.end(), 0.0f) * (pojo ? -1 : 1) > 0);
+    // Becoming Pojo (93) is the one announcement made under the character's own name:
+    // the original's "POJO IS NOW POJO" named the new form twice.
+    const bool namedPojo = pojo && lesson != HelpMessages::kNowPojo;
+    CHECK(std::accumulate(samples.begin(), samples.end(), 0.0f) * (namedPojo ? -1 : 1) > 0);
 }
 
 TEST_CASE("shop level announcements retain Pojo's name after saving and loading EGG911",

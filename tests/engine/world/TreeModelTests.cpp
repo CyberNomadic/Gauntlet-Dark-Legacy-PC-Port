@@ -393,6 +393,33 @@ TEST_CASE("pickup passes separate blended mesh parts without changing native dep
         CHECK(part.state.depthTest);
         CHECK(part.state.blend == BlendMode::Additive);
     }
+    // An ordinary sort key keeps the glow ahead of the scenery's deferred queue.
+    draw(TreeModel::Pass::BlendedAhead);
+    CHECK(device.draws.size() == 2);
+    draw(TreeModel::Pass::BlendedBehind);
+    CHECK(device.draws.empty());
+    // A gem's halo (0x4C00880: facing, additive, sorted, behind, no depth write) waits for
+    // the scenery sorted before it and composites over it, still tested against depth.
+    tree.nodes[1].objectFlags = 0x4C00880;
+    REQUIRE(figure.bind(tree, models, textures, device));
+    draw(TreeModel::Pass::BlendedAhead);
+    CHECK(device.draws.empty());
+    draw(TreeModel::Pass::BlendedBehind);
+    REQUIRE(device.draws.size() == 2);
+    for (const auto& part : device.draws) {
+        CHECK_FALSE(part.state.depthWrite);
+        CHECK(part.state.depthTest);
+        CHECK(part.state.blend == BlendMode::Additive);
+        CHECK_FALSE(part.state.usesAlphaToCoverage(4));
+    }
+    draw(TreeModel::Pass::Blended);
+    CHECK(device.draws.size() == 2); // the undivided pass still draws it
+    draw(TreeModel::Pass::Opaque);
+    CHECK(device.draws.empty());
+    CHECK(TreeModel::compositesEffects(TreeModel::Pass::Blended));
+    CHECK(TreeModel::compositesEffects(TreeModel::Pass::BlendedAhead));
+    CHECK_FALSE(TreeModel::compositesEffects(TreeModel::Pass::BlendedBehind));
+    CHECK_FALSE(TreeModel::compositesEffects(TreeModel::Pass::Opaque));
 }
 
 TEST_CASE("only translucent pickup billboards opt in to smooth sprite filtering",

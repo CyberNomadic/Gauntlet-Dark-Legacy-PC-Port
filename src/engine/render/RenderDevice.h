@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <stdexcept>
+#include <string>
 
 #include "engine/core/SpecialMembers.h"
 #include "engine/core/Types.h"
@@ -18,6 +20,13 @@ class Texture;
 struct DepthOfField;
 struct AmbientOcclusion;
 struct HeatSource;
+
+/** A graphics API that cannot start on this machine: no loader, driver, context or
+ * device fit for it. The application then tries the other API. */
+class RenderDeviceUnavailable : public std::runtime_error {
+public:
+    explicit RenderDeviceUnavailable(const std::string& reason) : std::runtime_error(reason) {}
+};
 
 struct RenderDeviceDesc {
     bool vsync = true;
@@ -148,6 +157,12 @@ public:
 
     virtual void waitIdle() = 0;
 
+    /** Lets go of the thread the device was made on, before another thread takes it up
+     * with attachToThread; every later call belongs to that thread. A device whose API
+     * is not bound to a thread does nothing. */
+    virtual void detachFromThread() {}
+    virtual void attachToThread() {}
+
     /** Blurs the scene drawn so far, leaving subsequent HUD/menu draws sharp.
      * Returns false when the device cannot sample its depth/color buffers. */
     virtual bool applyDepthOfField(const DepthOfField& settings) = 0;
@@ -160,7 +175,11 @@ public:
     virtual bool applyAmbientOcclusion(const AmbientOcclusion& settings) = 0;
 };
 
+/** Either throws RenderDeviceUnavailable when its API cannot start on this machine. The
+ * window must have been made for the API: a Vulkan window carries no OpenGL context. */
 std::unique_ptr<RenderDevice> createVulkanRenderDevice(Window& window,
+                                                       const RenderDeviceDesc& desc);
+std::unique_ptr<RenderDevice> createOpenGlRenderDevice(Window& window,
                                                        const RenderDeviceDesc& desc);
 
 } // namespace gdl

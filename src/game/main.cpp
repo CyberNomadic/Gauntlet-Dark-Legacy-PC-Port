@@ -7,6 +7,25 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <algorithm>
+#include <bit>
+#include <cwchar>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+// clang-format off
+// shellapi.h takes its types from windows.h, so the order stands.
+#include <windows.h> // IWYU pragma: keep
+
+#include <shellapi.h>
+// clang-format on
+#endif
+
 #include "engine/app/Application.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
@@ -27,9 +46,37 @@
 
 namespace {
 
-int runGauntlet(std::span<char*> rawArgs) {
+#ifdef _WIN32
+/** The command line as UTF-8, whatever the system code page: a path beyond that page
+ * reaches the game whole. */
+std::vector<std::string> utf8Arguments(std::span<char*> fallback) {
+    int count = 0;
+    wchar_t** wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (wide == nullptr) {
+        return {fallback.begin(), fallback.end()};
+    }
+    const std::span<wchar_t*> arguments(wide, static_cast<gdl::usize>(std::max(count, 0)));
+    std::vector<std::string> args;
+    args.reserve(arguments.size());
+    for (const wchar_t* argument : arguments) {
+        const auto wideLength = static_cast<int>(std::wcslen(argument));
+        const int length =
+            WideCharToMultiByte(CP_UTF8, 0, argument, wideLength, nullptr, 0, nullptr, nullptr);
+        std::string arg(static_cast<gdl::usize>(std::max(length, 0)), '\0');
+        if (length > 0) {
+            WideCharToMultiByte(CP_UTF8, 0, argument, wideLength, arg.data(), length, nullptr,
+                                nullptr);
+        }
+        args.push_back(std::move(arg));
+    }
+    LocalFree(std::bit_cast<HLOCAL>(wide)); // the same handle, without a pointer conversion
+    return args;
+}
+#endif
+
+int runGauntlet(std::span<const std::string> rawArgs) {
     std::vector<std::string_view> args;
-    for (const char* arg : rawArgs.subspan(rawArgs.empty() ? 0 : 1)) {
+    for (const std::string& arg : rawArgs.subspan(rawArgs.empty() ? 0 : 1)) {
         args.emplace_back(arg);
     }
 
@@ -70,6 +117,8 @@ int runGauntlet(std::span<char*> rawArgs) {
     parsed.desc.window.width = config.display.windowWidth;
     parsed.desc.window.height = config.display.windowHeight;
     parsed.desc.window.mode = config.display.windowMode;
+    parsed.desc.window.monitor = config.display.monitor;
+    parsed.desc.renderer = config.display.renderer;
     parsed.desc.vsync = config.display.vsync && !vsyncFromCommandLine;
     parsed.desc.sampleCount = config.display.sampleCount;
     parsed.desc.textureFiltering = config.display.textureFiltering;
@@ -94,7 +143,13 @@ int main(int argc, char* argv[]) {
             std::fputs("\n", stderr);
             return 1;
         }
-        return runGauntlet(std::span<char*>(argv, static_cast<gdl::usize>(argc)));
+        const std::span<char*> raw(argv, static_cast<gdl::usize>(argc));
+#ifdef _WIN32
+        const std::vector<std::string> arguments = utf8Arguments(raw);
+#else
+        const std::vector<std::string> arguments(raw.begin(), raw.end());
+#endif
+        return runGauntlet(arguments);
     } catch (const std::exception& e) {
         std::fputs(e.what(), stderr);
         std::fputs("\n", stderr);

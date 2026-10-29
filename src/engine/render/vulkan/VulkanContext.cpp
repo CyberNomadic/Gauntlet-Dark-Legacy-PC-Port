@@ -10,6 +10,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/platform/Window.h"
+#include "engine/render/RenderDevice.h"
 
 namespace gdl {
 
@@ -57,20 +58,31 @@ const char* deviceTypeName(VkPhysicalDeviceType type) {
 } // namespace
 
 VulkanContext::VulkanContext(Window& window, bool enableValidation) {
-    createInstance(window, enableValidation);
-    if (m_validationEnabled) {
-        createDebugMessenger();
+    try {
+        createInstance(window, enableValidation);
+        if (m_validationEnabled) {
+            createDebugMessenger();
+        }
+        if (!window.createVulkanSurface(m_instance, &m_surface)) {
+            throw RenderDeviceUnavailable(
+                "No Vulkan presentation surface could be made for the window");
+        }
+        pickPhysicalDevice();
+        createDevice();
+    } catch (const RenderDeviceUnavailable&) {
+        destroy();
+        throw;
     }
-    GDL_VERIFY(window.createVulkanSurface(m_instance, &m_surface),
-               "Failed to create a Vulkan presentation surface for the window");
-    pickPhysicalDevice();
-    createDevice();
     createAllocator();
     createUploadPool();
     m_depthFormat = findDepthFormat();
 }
 
 VulkanContext::~VulkanContext() {
+    destroy();
+}
+
+void VulkanContext::destroy() {
     if (m_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(m_device);
     }
@@ -92,17 +104,26 @@ VulkanContext::~VulkanContext() {
     if (m_instance != VK_NULL_HANDLE) {
         vkDestroyInstance(m_instance, nullptr);
     }
+    m_uploadPool = VK_NULL_HANDLE;
+    m_allocator = VK_NULL_HANDLE;
+    m_device = VK_NULL_HANDLE;
+    m_surface = VK_NULL_HANDLE;
+    m_debugMessenger = VK_NULL_HANDLE;
+    m_instance = VK_NULL_HANDLE;
 }
 
 void VulkanContext::createInstance(Window& window, bool enableValidation) {
-    GDL_VERIFY(volkInitialize() == VK_SUCCESS,
-               "Vulkan loader not found. Install a Vulkan-capable graphics driver.");
+    if (volkInitialize() != VK_SUCCESS) {
+        throw RenderDeviceUnavailable(
+            "No Vulkan loader was found; a Vulkan-capable graphics driver is not installed");
+    }
 
     const u32 loaderVersion = volkGetInstanceVersion();
     log::info("Vulkan loader: {}.{}.{}", VK_API_VERSION_MAJOR(loaderVersion),
               VK_API_VERSION_MINOR(loaderVersion), VK_API_VERSION_PATCH(loaderVersion));
-    GDL_VERIFY(loaderVersion >= VK_API_VERSION_1_3,
-               "Vulkan 1.3 or newer is required (update your graphics driver)");
+    if (loaderVersion < VK_API_VERSION_1_3) {
+        throw RenderDeviceUnavailable("Vulkan 1.3 or newer is needed; the loader is older");
+    }
 
     u32 layerCount = 0;
     GDL_VK_CHECK(vkEnumerateInstanceLayerProperties(&layerCount, nullptr));
@@ -116,6 +137,9 @@ void VulkanContext::createInstance(Window& window, bool enableValidation) {
                                                         availableExtensions.data()));
 
     std::vector<const char*> extensions = window.requiredVulkanInstanceExtensions();
+    if (extensions.empty()) {
+        throw RenderDeviceUnavailable("The window system cannot present through Vulkan");
+    }
     std::vector<const char*> enabledLayers;
 
     if (enableValidation) {
@@ -132,8 +156,10 @@ void VulkanContext::createInstance(Window& window, bool enableValidation) {
     }
 
     for (const char* extension : extensions) {
-        GDL_VERIFY(hasExtension(availableExtensions, extension),
-                   "A required Vulkan instance extension is missing");
+        if (!hasExtension(availableExtensions, extension)) {
+            throw RenderDeviceUnavailable(std::string("The Vulkan instance extension ") +
+                                          extension + " is missing");
+        }
     }
 
     VkApplicationInfo appInfo{};
@@ -152,7 +178,11 @@ void VulkanContext::createInstance(Window& window, bool enableValidation) {
     createInfo.enabledExtensionCount = static_cast<u32>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
-    GDL_VK_CHECK(vkCreateInstance(&createInfo, nullptr, &m_instance));
+    const VkResult created = vkCreateInstance(&createInfo, nullptr, &m_instance);
+    if (created != VK_SUCCESS) {
+        throw RenderDeviceUnavailable(std::string("vkCreateInstance returned ") +
+                                      vk::resultToString(created));
+    }
     volkLoadInstance(m_instance);
 }
 
@@ -172,7 +202,9 @@ void VulkanContext::createDebugMessenger() {
 void VulkanContext::pickPhysicalDevice() {
     u32 deviceCount = 0;
     GDL_VK_CHECK(vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr));
-    GDL_VERIFY(deviceCount > 0, "No Vulkan-capable GPU found");
+    if (deviceCount == 0) {
+        throw RenderDeviceUnavailable("No Vulkan-capable GPU was found");
+    }
     std::vector<VkPhysicalDevice> devices(deviceCount);
     GDL_VK_CHECK(vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data()));
 
@@ -249,9 +281,11 @@ void VulkanContext::pickPhysicalDevice() {
         }
     }
 
-    GDL_VERIFY(m_physicalDevice != VK_NULL_HANDLE,
-               "No suitable GPU: need Vulkan 1.3 with dynamicRendering, synchronization2 and "
-               "a graphics queue that can present");
+    if (m_physicalDevice == VK_NULL_HANDLE) {
+        throw RenderDeviceUnavailable(
+            "No suitable GPU: Vulkan 1.3 with dynamicRendering, synchronization2 and a "
+            "graphics queue that can present is needed");
+    }
 
     log::info("GPU: {} ({}, Vulkan {}.{}.{}, driver 0x{:08x})", m_properties.deviceName,
               deviceTypeName(m_properties.deviceType),
@@ -300,7 +334,11 @@ void VulkanContext::createDevice() {
     createInfo.enabledExtensionCount = static_cast<u32>(kRequiredDeviceExtensions.size());
     createInfo.ppEnabledExtensionNames = kRequiredDeviceExtensions.data();
 
-    GDL_VK_CHECK(vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device));
+    const VkResult created = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
+    if (created != VK_SUCCESS) {
+        throw RenderDeviceUnavailable(std::string("vkCreateDevice returned ") +
+                                      vk::resultToString(created));
+    }
     volkLoadDevice(m_device);
     vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
 }

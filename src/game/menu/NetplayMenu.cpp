@@ -61,17 +61,13 @@ void NetplayMenu::show(RenderDevice& device, const View& view) {
     case Page::Guest: {
         const bool host = view.page == Page::Host;
         title = host ? "Host Game" : "Joined Game";
-        static constexpr std::array<const char*, 3> kDifficulty{"Easy", "Normal", "Hard"};
-        static constexpr std::array<const char*, 3> kDamage{"Off", "Stun", "Damage"};
         row(host ? "Copy invitation code" : "Connected to host", Action::Copy,
             host && !view.invitation.empty());
         row(std::format("Player limit    < {} >    ({} joined)", view.settings.maxPlayers,
                         view.players),
             Action::Capacity, host && view.connected, true);
-        row(std::format("Difficulty    < {} >", kDifficulty[view.settings.difficulty]),
-            Action::Difficulty, host && view.connected, true);
-        row(std::format("Friendly fire    < {} >", kDamage[view.settings.friendlyFire]),
-            Action::FriendlyFire, host && view.connected, true);
+        // The game's rules have a page of their own; a guest reads them there.
+        row("Game Settings", Action::GameSettings, view.connected);
         row(std::format("Select {} local character(s)", view.localPlayers),
             Action::SelectCharacters, view.connected && !view.ready);
         row(view.ready ? "Not Ready" : "Ready", Action::Ready, view.connected && view.selected);
@@ -79,6 +75,25 @@ void NetplayMenu::show(RenderDevice& device, const View& view) {
             row("Start Game", Action::Start, view.canStart);
         }
         row("Leave Room", Action::Leave);
+        break;
+    }
+    case Page::Settings: {
+        // The host sets the game's rules for everyone; a guest sees them, greyed.
+        title = "Game Settings";
+        static constexpr std::array<const char*, 3> kDifficulty{"Easy", "Normal", "Hard"};
+        static constexpr std::array<const char*, 3> kDamage{"Off", "Stun", "Damage"};
+        static constexpr std::array<const char*, 2> kCamera{"Shared", "Solo"};
+        static constexpr std::array<const char*, 2> kAggressor{"Off", "On"};
+        const bool sets = view.host && view.connected;
+        row(std::format("Difficulty    < {} >", kDifficulty[view.settings.difficulty]),
+            Action::Difficulty, sets, true);
+        row(std::format("Friendly fire    < {} >", kDamage[view.settings.friendlyFire]),
+            Action::FriendlyFire, sets, true);
+        row(std::format("Camera    < {} >", kCamera[view.settings.camera & 1U]), Action::Camera,
+            sets, true);
+        row(std::format("Aggressor Mode    < {} >", kAggressor[view.settings.aggressor & 1U]),
+            Action::Aggressor, sets, true);
+        row("Back", Action::Back);
         break;
     }
     case Page::Join:

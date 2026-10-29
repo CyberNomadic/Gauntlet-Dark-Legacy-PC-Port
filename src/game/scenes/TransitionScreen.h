@@ -12,15 +12,15 @@ namespace gdl::game {
 
 /**
  * The picture that covers the play view between levels, as the original's does: it comes up
- * over two seconds once the party has gone through a portal, stays while the next level
- * loads, and clears once the party has arrived. It covers the view above the status boxes,
- * which stay in sight.
+ * over two seconds once the party has gone through a portal and stays while the next level
+ * loads, which then cuts in over it (the original never fades it out). It covers the view
+ * above the status boxes, which stay in sight.
  */
 class TransitionScreen {
 public:
     static constexpr std::string_view kTexture = "TRANSITION_SCREEN";
     static constexpr f32 kFadeInSeconds = 2.0f;  ///< the original's, leaving a level
-    static constexpr f32 kFadeOutSeconds = 0.5f; ///< arriving; the original's was not found
+    static constexpr f32 kFadeOutSeconds = 0.5f; ///< clearAway's, which no arrival uses
     static constexpr f32 kViewHeight = 320.0f;   ///< of the 384 rows: the rest is the boxes'
 
     enum class Phase : u8 { Off, ComingUp, Covering, Clearing };

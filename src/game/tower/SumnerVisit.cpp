@@ -160,7 +160,6 @@ void SumnerVisit::open(s32 player, const TextPainter& text, const GameConfig* co
     for (const HintTopicEntry& topic : kHintTopics) {
         labels.topics.push_back(MenuItem{std::string(strings.get(topic.text)), topic.code});
     }
-    labels.back = std::string(strings.get("menu.back"));
     labels.select = std::string(strings.get("menu.select"));
     labels.player = std::string(strings.get("menu.player"));
     if (const auto slot = labels.player.find("{}"); slot != std::string::npos) {

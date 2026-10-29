@@ -1,5 +1,6 @@
 #include "engine/world/WorldCamera.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "engine/core/Types.h"
@@ -167,6 +168,37 @@ Mat4 CameraFrame::face(const Mat4& placement, u32 mode) const {
     }
     Mat4 faced = placement;
     const Vec3 at{placement[3]};
+    if (mode == kFacingProjectedYaw) {
+        // Legends N64 e002754c/e001e640 use the centre in view space, not its
+        // world-XZ bearing. e001e488 adds pi to camera-forward yaw; e001e640
+        // adds another pi, cancelling modulo a turn. e0013a70 then rotates
+        // only the X/Z basis columns, preserving the Y axis and placement.
+        const Vec3 offset = at - position;
+        const f32 eyeX = glm::dot(right, offset);
+        const f32 eyeZ = glm::dot(forward, offset);
+        if (!std::isfinite(eyeX) || !std::isfinite(eyeZ) || !std::isfinite(forward.x) ||
+            !std::isfinite(forward.z) || !std::isfinite(placement[0].z) ||
+            !std::isfinite(placement[2].z)) {
+            return placement;
+        }
+        const auto angle = [](f32 x, f32 z) {
+            return x == 0.0f && z == 0.0f ? 0.0f : std::atan2(x, z);
+        };
+        const f32 turn =
+            std::remainder(angle(-eyeX, -eyeZ) + angle(placement[0].z, placement[2].z) +
+                               angle(forward.x, forward.z),
+                           kTwoPi);
+        if (std::abs(turn) < 0.0001f) {
+            return placement;
+        }
+        const f32 sine = std::sin(turn);
+        const f32 cosine = std::cos(turn);
+        for (int row = 0; row < 3; ++row) {
+            faced[0][row] = placement[0][row] * cosine - placement[2][row] * sine;
+            faced[2][row] = placement[2][row] * cosine + placement[0][row] * sine;
+        }
+        return faced;
+    }
     if (mode == kFacingTop) {
         // An XZ ribbon keeps its length and direction. Only its width rolls to
         // put the top surface toward the eye; facing its z at the eye collapses
@@ -207,6 +239,62 @@ Mat4 CameraFrame::face(const Mat4& placement, u32 mode) const {
     faced[1] = Vec4{0.0f, scale.y, 0.0f, 0.0f};
     faced[2] = Vec4{s * scale.z, 0.0f, c * scale.z, 0.0f};
     return faced;
+}
+
+
+ViewSet ViewSet::of(const ViewVolume& eye, const Vec3& attention) {
+    ViewSet views;
+    views.add(eye, attention);
+    return views;
+}
+
+void ViewSet::add(const ViewVolume& eye, const Vec3& attention) {
+    if (count >= kMost) {
+        return;
+    }
+    eyes[count] = eye;
+    attentions[count] = attention;
+    ++count;
+}
+
+bool ViewSet::sees(const Vec3& centre, f32 radius, f32 reach) const {
+    for (u32 i = 0; i < std::min<u32>(count, kMost); ++i) {
+        if (!eyes[i].sees(centre, radius)) {
+            continue;
+        }
+        if (reach <= 0.0f) {
+            return true;
+        }
+        const Vec3 away = centre - attentions[i];
+        if (glm::dot(away, away) <= reach * reach) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ViewSet::bounded(f32 magnitude) const {
+    const auto finite = [&](const Vec3& v) {
+        for (s32 axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(v[axis]) || std::abs(v[axis]) > magnitude) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto unit = [](f32 v) { return std::isfinite(v) && v >= -1.0f && v <= 1.0f; };
+    if (count > kMost) {
+        return false;
+    }
+    for (u32 i = 0; i < count; ++i) {
+        const ViewVolume& eye = eyes[i];
+        if (!finite(eye.position) || !finite(eye.right) || !finite(eye.up) ||
+            !finite(eye.forward) || !unit(eye.sinX) || !unit(eye.cosX) || !unit(eye.sinY) ||
+            !unit(eye.cosY) || !finite(attentions[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace gdl

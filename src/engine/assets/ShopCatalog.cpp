@@ -11,6 +11,7 @@
 #include "engine/core/Strings.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/ShopWad.h"
 
@@ -66,7 +67,7 @@ ShopCatalog ShopCatalog::fromJson(std::string_view text) {
 bool ShopCatalog::load(const std::filesystem::path& file) {
     m_items.clear();
     try {
-        if (toLowerAscii(file.extension().string()) == ".wad") {
+        if (toLowerAscii(paths::utf8(file.extension())) == ".wad") {
             ShopCatalog catalog;
             for (const auto& record : formats::parseShopWad(readFile(file))) {
                 catalog.m_items.push_back({record.texture, record.description, record.scale,
@@ -79,7 +80,7 @@ bool ShopCatalog::load(const std::filesystem::path& file) {
         }
         return true;
     } catch (const std::exception& e) {
-        log::warn("Shop catalog {}: {}", file.string(), e.what());
+        log::warn("Shop catalog {}: {}", paths::utf8(file), e.what());
         return false;
     }
 }

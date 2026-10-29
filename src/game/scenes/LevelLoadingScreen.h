@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -39,10 +40,24 @@ public:
     static bool movieWanted(std::string_view movie, std::span<const PartyMember> party);
 
 private:
+    /** The four tiles named `prefix`_00..03 joined into one picture at their places and
+     * mended across their joins (MapPicture), so no seam shows however the picture is
+     * scaled; empty with a tile missing. */
+    struct Picture {
+        std::unique_ptr<Texture> texture;
+        f32 width = 0;
+        f32 height = 0;
+    };
     SoundHandle play(std::string_view name, SoundHandle after = kNoSound);
     void tile(Canvas& canvas, RenderDevice& device, std::string_view name, const Vec2& position,
               f32 alpha);
+    Picture join(RenderDevice& device, std::string_view prefix);
+    /** Draws the joined picture, or its tiles one by one when it could not be joined. */
+    void picture(Canvas& canvas, RenderDevice& device, const Picture& joined,
+                 std::string_view prefix, f32 alpha);
     TextureSet m_textures;
+    Picture m_map;
+    Picture m_preview;
     TransitionScreen m_transition;
     StatusBoxPainter m_boxes;
     std::array<StatusBoxView, 4> m_status;

@@ -963,6 +963,41 @@ TEST_CASE("fading a target hides and unblocks its entire subtree", "[game][world
     }
 }
 
+TEST_CASE("a platform that goes clear as it moves holds still under a player standing on it",
+          "[game][world][triggers][platform-riders]") {
+    // ProcessItemWobjs skips the height step while did_generate finds a player on the
+    // object, unless the target keeps blocking (0x8): the platform waits for its rider.
+    // A params-driven switch (subtype 24) keeps blocking by default; subtype 26's table
+    // flags carry no such bit, so its platform waits for a rider.
+    const bool staysSolid = GENERATE(false, true);
+    SwitchFixture f(R"({"info":0,"position":[20,0,0],
+      "params":[0,0,0,0,2,255,0,0,0,0,16,255]})",
+                    R"({"name":"WALL","position":[0,10,0],"flags":4096})", staysSolid ? 24 : 26);
+    WorldCollision collision;
+    const std::array button{TriggerVisitor{.position = Vec3{20, 0, 0}, .party = 0}};
+    const std::array both{TriggerVisitor{.position = Vec3{20, 0, 0}, .party = 0},
+                          TriggerVisitor{.position = Vec3{0, 10, 0}, .floorObject = 0, .party = 1}};
+    f.triggers.update(1.0f / 30, both, f.animator, f.scene, &collision);
+    REQUIRE(f.triggers.opened(0));
+    const f32 start = f.height();
+    for (s32 tick = 0; tick < 30; ++tick) {
+        f.triggers.update(1.0f / 30, both, f.animator, f.scene, &collision);
+    }
+    if (staysSolid) {
+        CHECK(f.height() < start); // a lift carries its riders
+        CHECK(collision.floorExitBlocked(0));
+    } else {
+        CHECK(f.height() == start); // the platform waits, and nobody is trapped on it
+        CHECK_FALSE(collision.floorExitBlocked(0));
+        CHECK_FALSE(f.triggers.settled(0));
+    }
+    // The rider gone, it goes on down.
+    for (s32 tick = 0; tick < 30; ++tick) {
+        f.triggers.update(1.0f / 30, button, f.animator, f.scene, &collision);
+    }
+    CHECK(f.height() < start);
+}
+
 TEST_CASE("revealed momentary bridges wait for their final rider without pressing the pad",
           "[game][world][triggers][bridge-occupants][triggers-local-rewind]") {
     const bool enemy = GENERATE(false, true);

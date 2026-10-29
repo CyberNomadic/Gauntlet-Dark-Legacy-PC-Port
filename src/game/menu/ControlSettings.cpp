@@ -1,27 +1,26 @@
 #include "game/menu/ControlSettings.h"
 
 #include <algorithm>
+#include <cctype>
 
 #include "game/config/ControlProfiles.h"
 #include "game/menu/SettingsRows.h"
 
 namespace gdl::game {
 namespace {
-constexpr s32 kPageSize = 6;
 constexpr s32 kDevice = 100;
-constexpr s32 kNext = 101;
 constexpr s32 kDefaults = 102;
-constexpr s32 kBack = 103;
 constexpr s32 kApply = 104;
 constexpr s32 kRumble = 105;
 constexpr s32 kScheme = 106;
-constexpr s32 kActionCount = 3;
+constexpr s32 kGestures = 107; ///< the potion key's hold and double tap
+constexpr s32 kActionCount = 2;
 constexpr s32 kActionY = 268;
 constexpr s32 kActionGap = 24;
 constexpr s32 kCanvasWidth = 512;
 constexpr s32 kCaptureTicks = 600;
 // A player's bindings are many rows with values; they share the parchment with the page's
-// actions by staying small.
+// actions by staying small and scrolling behind a window of a few rows.
 constexpr s32 kEditorX = 78;
 constexpr s32 kEditorY = 94;
 constexpr s32 kEditorRowStep = 18;
@@ -29,18 +28,29 @@ constexpr f32 kEditorScale = 0.45f;
 constexpr f32 kEditorCursorScale = 0.6f;
 constexpr s32 kEditorValueX = 282;
 constexpr s32 kEditorValueWidth = 148;
-s32 pageCount() {
-    return (static_cast<s32>(controlActions().size()) + kPageSize - 1) / kPageSize;
-}
 MenuEvent moved() {
     return {MenuAction::Moved, 0};
+}
+/** Whether the potion key's gestures are on for the device a profile is assigned. */
+bool gesturesOf(const PlayerControlConfig& profile, bool keyboard) {
+    return keyboard ? profile.play.keyboardMagicGestures : profile.play.padMagicGestures;
+}
+/** The gesture words, written in a sentence in the strings, as a row's title. */
+std::string titleCase(std::string words) {
+    bool start = true;
+    for (char& c : words) {
+        if (start) {
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
+        start = c == ' ';
+    }
+    return words;
 }
 } // namespace
 void ControlSettings::begin(const GameConfig& config) {
     m_draft = config;
     m_navigation = config;
     m_player = -1;
-    m_page = 0;
     m_capture = -1;
     m_failed = false;
 }
@@ -80,26 +90,30 @@ std::vector<PlayerControlConfig> ControlSettings::choices(const GameConfig& conf
 void ControlSettings::define(MenuDefinition& definition, const TextPainter& painter,
                              const std::function<std::string(std::string_view)>& text) const {
     definition.title = text("menu.controls");
-    definition.titleScale = 0.75f;
     definition.playerLabel.clear();
     definition.fades = false;
     definition.items.clear();
     definition.body.clear();
     definition.itemPositions.clear();
+    definition.tailPositions.clear();
+    definition.visibleRows = 0;
     SettingsRows rows(definition, painter, text);
     if (m_player < 0) {
-        // The players read as the other choice pages do.
-        rows.column();
+        // The players read as the root's choices do: full size, centred on the screen.
+        definition.x = -(kCanvasWidth / 2);
+        definition.y = -1;
         for (s32 player = 0; player < 4; ++player) {
             rows.choice(text("controls.player") + " " + std::to_string(player + 1), player);
         }
-        rows.choice(text("settings.back"), kBack);
+        rows.fit(1.0f, kCanvasWidth);
         return;
     }
+    definition.titleScale = 0.75f;
     rows.column(kEditorX, kEditorY, kEditorScale);
     definition.cursorScale = kEditorCursorScale;
     definition.valueX = kEditorValueX;
     definition.valueWidth = kEditorValueWidth;
+    definition.visibleRows = kVisibleRows;
     const auto& config = m_draft;
     auto profile = config.controls[static_cast<usize>(m_player)];
     if (!profile.customized) {
@@ -142,15 +156,13 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
         default: return std::string(padButtonName(button));
         }
     };
-    for (s32 row = 0; row < kPageSize; ++row) {
-        const s32 index = m_page * kPageSize + row;
-        if (index >= static_cast<s32>(actions.size())) {
-            break;
-        }
-        const auto& action = actions[static_cast<usize>(index)];
+    const bool gestures = gesturesOf(profile, assigned.keyboard);
+    for (usize index = 0; index < actions.size(); ++index) {
+        const auto& action = actions[index];
         const std::string_view actionId = action.id;
+        const bool gestureAction = actionId == "throwPotion" || actionId == "shieldPotion";
         std::string value;
-        if (m_capture == index) {
+        if (m_capture == static_cast<s32>(index)) {
             value = text("controls.press");
         } else if (assigned.keyboard) {
             for (const auto key : action.keyboard(profile)) {
@@ -163,6 +175,11 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
                 value += " / ";
                 value += buttonLabel(action.controller(profile).front());
             }
+            if (value.empty() && gestures && gestureAction && !profile.play.usePotion.empty()) {
+                value = std::string(keyName(profile.play.usePotion.front())) + " (" +
+                        text(actionId == "throwPotion" ? "controls.hold" : "controls.doubleTap") +
+                        ")";
+            }
         } else {
             for (const auto button : action.controller(profile)) {
                 if (!value.empty()) {
@@ -170,9 +187,7 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
                 }
                 value += buttonLabel(button);
             }
-            if (value.empty() && profile.play.padMagicGestures &&
-                !profile.play.padUsePotion.empty() &&
-                (actionId == "throwPotion" || actionId == "shieldPotion")) {
+            if (value.empty() && gestures && gestureAction && !profile.play.padUsePotion.empty()) {
                 value = buttonLabel(profile.play.padUsePotion.front()) + " (" +
                         text(actionId == "throwPotion" ? "controls.hold" : "controls.doubleTap") +
                         ")";
@@ -184,22 +199,22 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
         if (value.size() > 25) {
             value = value.substr(0, 22) + "...";
         }
-        rows.value(text("controls." + std::string(action.id)), index, value, canBind);
+        rows.value(text("controls." + std::string(action.id)), static_cast<s32>(index), value,
+                   canBind);
     }
+    // The potion key's gestures: a hold throws and a double tap shields, as on a pad.
+    rows.toggle(titleCase(text("controls.hold")) + " / " + titleCase(text("controls.doubleTap")),
+                kGestures, gestures)
+        .enabled = canBind;
     if (const auto* pad = m_devices.padDevice(assigned.pad);
         pad != nullptr && pad->rumbleSupported) {
         rows.toggle(text("controls.rumble"), kRumble, profile.rumble);
     }
-    rows.value("", kNext,
-               text("controls.page") + " " + std::to_string(m_page + 1) + "/" +
-                   std::to_string(pageCount()));
-    rows.choice(text("settings.apply"), kApply);
-    rows.choice(text("settings.defaults"), kDefaults);
-    rows.choice(text("settings.back"), kBack);
-    for (usize i = 0; i < definition.items.size(); ++i) {
-        definition.itemPositions.emplace_back(kEditorX,
-                                              kEditorY + static_cast<s32>(i) * kEditorRowStep);
-        auto& value = definition.items[i].value;
+    // The rows keep the editor's own step; a value too wide for its column is cut short.
+    const s32 lineHeight = painter.lineHeight(definition.scale);
+    for (auto& item : definition.items) {
+        item.extraSpacing = std::max(0, kEditorRowStep - lineHeight);
+        auto& value = item.value;
         if (painter.measure(value, definition.scale) > definition.valueWidth) {
             while (!value.empty() &&
                    painter.measure(value + "...", definition.scale) > definition.valueWidth) {
@@ -212,19 +227,17 @@ void ControlSettings::define(MenuDefinition& definition, const TextPainter& pain
             value += "...";
         }
     }
+    // Apply and Restore Defaults stand in a row under the window, centred.
+    rows.choice(text("settings.apply"), kApply);
+    rows.choice(text("settings.defaults"), kDefaults);
     const auto firstAction = definition.items.size() - kActionCount;
-    auto& page = definition.items[firstAction - 1];
-    const auto pageWidth = painter.measure(page.value, definition.scale);
-    const auto pageX = (kCanvasWidth - pageWidth) / 2;
-    page.valueColumn = MenuValueColumn{pageX, pageWidth};
-    definition.itemPositions[firstAction - 1].x = static_cast<f32>(pageX);
     s32 width = kActionGap * (kActionCount - 1);
     for (usize i = firstAction; i < definition.items.size(); ++i) {
         width += painter.measure(definition.items[i].text, definition.scale);
     }
     s32 x = (kCanvasWidth - width) / 2;
     for (usize i = firstAction; i < definition.items.size(); ++i) {
-        definition.itemPositions[i] = Vec2{static_cast<f32>(x), kActionY};
+        definition.tailPositions.emplace_back(static_cast<f32>(x), kActionY);
         x += painter.measure(definition.items[i].text, definition.scale) + kActionGap;
     }
     if (m_failed || m_capture >= 0) {
@@ -350,28 +363,26 @@ ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu, Gam
         (mapped.left || mapped.right) && !mapped.back && !mapped.select && m_player >= 0;
     if (turned) {
         const auto code = menu.definition().items[static_cast<usize>(menu.selection())].code;
-        if (code == kDevice || code == kNext || code == kRumble || code == kScheme) {
+        if (code == kDevice || code == kRumble || code == kScheme || code == kGestures) {
             event = {MenuAction::Choice, code, 0, mapped.left ? -1 : 1};
         }
     }
-    if (event.action == MenuAction::Back ||
-        (event.action == MenuAction::Choice && event.code == kBack)) {
+    if (event.action == MenuAction::Back) {
         if (m_player < 0) {
-            return {{MenuAction::Back, kBack}, true};
+            return {{MenuAction::Back, 0}, true};
         }
         const s32 player = m_player;
         m_player = -1;
         m_draft = config;
         m_failed = false;
         rebuild(player);
-        return {{MenuAction::Back, kBack}};
+        return {{MenuAction::Back, 0}};
     }
     if (event.action != MenuAction::Choice) {
         return {event};
     }
     if (m_player < 0) {
         m_player = event.code;
-        m_page = 0;
         m_draft = config;
         m_failed = false;
         rebuild(0);
@@ -379,9 +390,19 @@ ControlSettings::update(const MenuInput& input, s32 ticks, OptionMenu& menu, Gam
     }
     // A value turned with an arrow is heard as a move, like the other pages' values.
     const MenuEvent heard = turned ? moved() : event;
-    if (event.code == kNext) {
-        m_page = (m_page + (event.direction < 0 ? -1 : 1) + pageCount()) % pageCount();
-        rebuild(firstAction - 1);
+    if (event.code == kGestures) {
+        auto& profile = m_draft.controls[static_cast<usize>(m_player)];
+        if (!profile.customized) {
+            profile.play = config.play;
+            profile.menu = config.menu;
+        }
+        profile.customized = true;
+        const auto device = controlDevices(m_draft, m_devices)[static_cast<usize>(m_player)];
+        bool& gestures =
+            device.keyboard ? profile.play.keyboardMagicGestures : profile.play.padMagicGestures;
+        gestures = !gestures;
+        m_failed = false;
+        rebuild(menu.selection());
     } else if (event.code == kRumble) {
         auto& profile = m_draft.controls[static_cast<usize>(m_player)];
         profile.rumble = !profile.rumble;

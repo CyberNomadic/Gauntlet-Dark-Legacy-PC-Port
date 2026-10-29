@@ -901,6 +901,35 @@ TEST_CASE("mouse continues through tally exit stats inventory and final stats wi
     scene.update(10, {});
     render();
     centeredContinue(92);
+    // Under the pointer the word keeps its white ink; only its glow holds steady.
+    {
+        ShopSession::Inputs hover{};
+        for (auto& input : hover) {
+            input.pointer = Vec2{2 * 128 + 48, 96};
+        }
+        scene.update(0, hover);
+        render();
+        centeredContinue(92);
+        const auto purple = Color::rgba(130, 0, 234);
+        CHECK(std::ranges::none_of(device.draws, [&](const auto& draw) {
+            const auto* texture = dynamic_cast<const test::FakeTexture*>(draw.texture);
+            return texture != nullptr && texture->pixels == pixels &&
+                   std::ranges::any_of(draw.vertices, [&](const ImmediateVertex& vertex) {
+                       return vertex.color.r == purple.r && vertex.color.g == purple.g &&
+                              vertex.color.b == purple.b && vertex.position.y >= 92 &&
+                              vertex.position.y <= 92 + 16;
+                   });
+        }));
+        CHECK(std::ranges::any_of(device.draws, [&](const auto& draw) {
+            const auto* texture = dynamic_cast<const test::FakeTexture*>(draw.texture);
+            return texture != nullptr && texture->pixels != pixels &&
+                   std::ranges::any_of(draw.vertices, [&](const ImmediateVertex& vertex) {
+                       return vertex.color.r == purple.r && vertex.color.g == purple.g &&
+                              vertex.color.b == purple.b && vertex.color.a == 255 &&
+                              vertex.position.y >= 92 && vertex.position.y <= 92 + 16;
+                   });
+        }));
+    }
     click(96);
     REQUIRE(scene.session().lanes()[0].phase == ShopPhase::Shopping);
     REQUIRE(scene.session().lanes()[1].phase == ShopPhase::Tally);
@@ -1312,4 +1341,59 @@ TEST_CASE("retail realm tally loop is shared, audible, and stopped when piles se
         scene.close();
     }
 }
+
+TEST_CASE("Sumner announces one gained level after another, never two at once",
+          "[shop][screens][audio][speech-timing][assets]") {
+    const auto root = test::assetOrSkip("SHPDATA/SHOP.WAD").parent_path().parent_path();
+    test::assetOrSkip("AUDIO/COMMON.VBK");
+    test::assetOrSkip("AUDIO/VOICE1.VBK");
+    test::assetOrSkip("AUDIO/VOICE2.VBK");
+    test::assetOrSkip("AUDIO/WAR.VBK");
+    test::FakeRenderDevice device;
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    GameContext context;
+    context.unpackedRoot = root;
+    context.sounds = &output;
+    CharacterSave save;
+    save.name = "SHOP";
+    save.progress().health = 100;
+    save.progress().experience = levelExperience(2);
+    const std::array<PartyMember, 2> party{{{0, save}, {1, save}}};
+    const std::array<LevelResults, 2> results{
+        {{0, {0, 0, levelExperience(2)}}, {1, {0, 0, levelExperience(2)}}}};
+    AfterLevelScene scene;
+    REQUIRE(scene.open(device, context, party, results, {1, 1, levelExperience(2)}, "G1"));
+    REQUIRE_FALSE(scene.update(10, {}));
+    struct Spoken {
+        SoundHandle handle;
+        SoundHandle after;
+        std::string bank;
+    };
+    std::vector<Spoken> spoken;
+    {
+        const SoundPlayer::Capture capture(&output, [&](const SoundPlayer::Event& event) {
+            if (event.kind == SoundPlayer::Event::Kind::Play && event.bank != "COMMON") {
+                spoken.push_back({event.handle, event.after, event.bank});
+            }
+        });
+        // Both players reach their level panels in the same moment.
+        ShopSession::Inputs accept{};
+        accept[0].select = true;
+        accept[1].select = true;
+        REQUIRE_FALSE(scene.update(0, accept));
+    }
+    REQUIRE(scene.session().lanes()[0].phase == ShopPhase::BeforeStats);
+    REQUIRE(scene.session().lanes()[1].phase == ShopPhase::BeforeStats);
+    // Name, "has", "gained a level" for each: the second name waits for the first phrase.
+    REQUIRE(spoken.size() == 6);
+    CHECK(spoken[0].after == kNoSound);
+    CHECK(spoken[1].after == spoken[0].handle);
+    CHECK(spoken[2].after == spoken[1].handle);
+    CHECK(spoken[3].after == spoken[2].handle);
+    CHECK(spoken[4].after == spoken[3].handle);
+    CHECK(spoken[5].after == spoken[4].handle);
+    scene.close();
+}
+
 } // namespace

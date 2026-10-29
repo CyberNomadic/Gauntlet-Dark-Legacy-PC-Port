@@ -27,6 +27,10 @@ struct Control {
     bool destroyed = false;
     std::thread::id renderThread;
     std::thread::id destroyThread;
+    std::thread::id detachThread;
+    std::thread::id attachThread;
+    s32 detached = 0;
+    s32 attached = 0;
     test::FakeRenderDevice draws;
     Extent2D extent;
     std::array<std::vector<u8>, 4> sampled;
@@ -116,6 +120,14 @@ public:
         m_control->draws.draw(batch, texture, transform, state);
     }
     void waitIdle() override { m_control->events.emplace_back("idle"); }
+    void detachFromThread() override {
+        m_control->detachThread = std::this_thread::get_id();
+        ++m_control->detached;
+    }
+    void attachToThread() override {
+        m_control->attachThread = std::this_thread::get_id();
+        ++m_control->attached;
+    }
     bool applyDepthOfField(const DepthOfField& settings) override {
         m_control->events.emplace_back("dof");
         return m_control->draws.applyDepthOfField(settings);
@@ -256,6 +268,23 @@ TEST_CASE("streamed texture updates survive a skipped swapchain frame", "[thread
     device.waitIdle();
     CHECK(control->draws.textureUpdates == 1);
     CHECK(control->sampled[0] == std::vector<u8>(latest.begin(), latest.end()));
+}
+
+TEST_CASE("the backend is handed from the application thread to the worker that drives it",
+          "[threaded-render][renderer]") {
+    auto control = std::make_shared<Control>();
+    {
+        ThreadedRenderDevice device(std::make_unique<Backend>(control), {800, 600});
+        REQUIRE(device.beginFrame());
+        device.endFrame();
+        device.waitIdle();
+    }
+    CHECK(control->detached == 1);
+    CHECK(control->attached == 1);
+    CHECK(control->detachThread == std::this_thread::get_id());
+    CHECK(control->attachThread != std::this_thread::get_id());
+    CHECK(control->attachThread == control->renderThread);
+    CHECK(control->destroyThread == control->attachThread);
 }
 
 TEST_CASE("render worker failures reach the application without hanging a barrier",

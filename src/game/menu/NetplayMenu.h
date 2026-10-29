@@ -15,7 +15,7 @@ namespace gdl::game {
  * never changes simulation state; the application consumes its explicit actions. */
 class NetplayMenu {
 public:
-    enum class Page : u8 { Choose, Host, Join, Guest, Pause, Leave, Finished };
+    enum class Page : u8 { Choose, Host, Join, Guest, Settings, Pause, Leave, Finished };
     enum class Action : u8 {
         None,
         Host,
@@ -29,8 +29,11 @@ public:
         Ready,
         Start,
         Capacity,
+        GameSettings,
         Difficulty,
         FriendlyFire,
+        Camera,
+        Aggressor,
         Resume,
         SaveCompletedProgress,
         ReturnTitle,
@@ -40,6 +43,7 @@ public:
     struct View {
         Page page = Page::Choose;
         RoomSettings settings;
+        bool host = false; ///< this machine hosts the room, so it sets the game's rules
         u8 localPlayers = 1;
         usize players = 0;
         bool connected = false;

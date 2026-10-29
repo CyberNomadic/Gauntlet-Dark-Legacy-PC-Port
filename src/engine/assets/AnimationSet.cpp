@@ -12,6 +12,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
@@ -173,7 +174,7 @@ bool AnimationSet::load(const std::filesystem::path& directory) {
             m_trees.push_back(std::move(info));
         }
     } catch (const std::exception& e) {
-        log::warn("Animation set {}: {}", manifest.string(), e.what());
+        log::warn("Animation set {}: {}", paths::utf8(manifest), e.what());
         m_trees.clear();
         m_textureAnimations.clear();
         m_particles.clear();

@@ -668,6 +668,19 @@ TEST_CASE("Temple spawning and entrance movement reject the wall-only underlay",
     const Vec3 underground{-19.283f, 0, 66.033f};
     CHECK_FALSE(collision.floorAt(underground, 6, 6));
     CHECK_FALSE(collision.floorAt({0, 0, 110}, 6, 6));
+    // check_enemy_pos's FloorCollide uses a .1-unit footprint, not a zero-radius
+    // point. This authored floor ends at X=-15, so the valid seed1 birth sits
+    // .0625 beyond its edge while retaining contact with E1FLOOR_ALT#07.
+    constexpr f32 kBirthFloorReach = .1f;
+    const Vec3 edgeBirth{-15.0625f, 1, -99.5f};
+    CHECK_FALSE(collision.floorAt(edgeBirth, .01f, .01f));
+    const auto edgeFloor = collision.floorAt(edgeBirth, .01f, .01f, kBirthFloorReach);
+    REQUIRE(edgeFloor);
+    REQUIRE(edgeFloor->object >= 0);
+    REQUIRE(static_cast<usize>(edgeFloor->object) < world.layout().objects().size());
+    CHECK(world.layout().objects()[static_cast<usize>(edgeFloor->object)].name == "E1FLOOR_ALT#07");
+    CHECK(edgeFloor->point.x == Approx(-15));
+    CHECK(glm::distance(edgeBirth, edgeFloor->point) == Approx(.0625f));
     Enemies enemies;
     enemies.open(device, root, &collision, Enemies::kMost, {}, 1);
     Generators generators;
@@ -682,9 +695,10 @@ TEST_CASE("Temple spawning and entrance movement reject the wall-only underlay",
         for (const auto& enemy : enemies.targets()) {
             CAPTURE(g, enemy.id, enemy.base.x, enemy.base.y, enemy.base.z);
             CHECK(enemy.base.y >= 0);
-            const auto floor = collision.floorAt(enemy.base, 0.01f, 0.01f);
+            const auto floor = collision.floorAt(enemy.base, 0.01f, 0.01f, kBirthFloorReach);
             REQUIRE(floor);
             CHECK((floor->objectFlags & WorldCollision::kFloorQueryFlags) != 0);
+            CHECK(glm::distance(enemy.base, floor->point) <= kBirthFloorReach + .00001f);
         }
     }
     REQUIRE(enemies.count() > 0);
@@ -1247,6 +1261,43 @@ TEST_CASE("level trigger eligibility uses joined count independently of standing
     world.updateTriggers(1.0f / 30, contacts);
     CHECK(triggers.trigger(index).fired);
     CHECK(triggers.opened(marker.target));
+}
+
+
+TEST_CASE("the console's party count sets the level up for that many until it is lifted",
+          "[party-count][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::FakeRenderDevice device;
+    LevelWorld tower;
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    const GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.unpackedRoot = root;
+    context.tower = &tower;
+    context.levels = &catalog;
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{0};
+    options.partyCount = 3;
+    std::vector party{PartyMember{0, CharacterSave{}}};
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, tower, party, options));
+    CHECK(scene.partyCountOverride() == 3);
+    CHECK(scene.partyCount(1) == 3);
+    CHECK(tower.placedItems().playerCount() == 3);
+    // Lifted, the level follows the players present again on the next tick.
+    scene.setPartyCountOverride(std::nullopt);
+    CHECK_FALSE(scene.partyCountOverride().has_value());
+    REQUIRE(scene.update(1.0 / 30, {}) == PlayOutcome::Running);
+    CHECK(tower.placedItems().playerCount() == 1);
+    // A count past the largest party is held to it.
+    scene.setPartyCountOverride(9);
+    CHECK(scene.partyCount(1) == 4);
+    REQUIRE(scene.update(1.0 / 30, {}) == PlayOutcome::Running);
+    CHECK(tower.placedItems().playerCount() == 4);
 }
 
 } // namespace

@@ -1,7 +1,9 @@
 #include "engine/assets/WorldLayout.h"
 
 #include <array>
+#include <cmath>
 #include <exception>
+#include <limits>
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
@@ -13,6 +15,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
@@ -45,6 +48,77 @@ std::optional<LocatorKind> locatorKindFromName(std::string_view name) {
         }
     }
     return std::nullopt;
+}
+
+WorldLayout WorldLayout::fromDecoded(std::vector<WorldObject> objects,
+                                     std::vector<WorldLocator> locators, Vec3 minBounds,
+                                     Vec3 maxBounds) {
+    const auto finite = [](const Vec3& value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    };
+    if (!finite(minBounds) || !finite(maxBounds) || minBounds.x > maxBounds.x ||
+        minBounds.y > maxBounds.y || minBounds.z > maxBounds.z ||
+        objects.size() > static_cast<usize>(std::numeric_limits<s32>::max())) {
+        throw FormatError("decoded world has invalid bounds or object count");
+    }
+    const auto validIndex = [&](s32 index) {
+        return index == -1 || (index >= 0 && static_cast<usize>(index) < objects.size());
+    };
+    for (auto& object : objects) {
+        if (!finite(object.position) || !std::isfinite(object.radius) || object.radius < 0 ||
+            !validIndex(object.next) || !validIndex(object.child)) {
+            throw FormatError("decoded world has invalid object metadata");
+        }
+        object.parent = -1;
+    }
+    // Each object can occur in only one parent's child list. This also catches
+    // cycles within a child list before resolving any world-space positions.
+    for (usize parent = 0; parent < objects.size(); ++parent) {
+        for (s32 child = objects[parent].child; child >= 0;
+             child = objects[static_cast<usize>(child)].next) {
+            auto& object = objects[static_cast<usize>(child)];
+            if (static_cast<usize>(child) == parent || object.parent >= 0) {
+                throw FormatError("decoded world has repeated or cyclic children");
+            }
+            object.parent = static_cast<s32>(parent);
+        }
+    }
+    // Validate both graphs in linear time: nested parent cycles and sibling
+    // cycles among roots are not necessarily encountered by the child lists.
+    const auto acyclic = [&](bool parents) {
+        std::vector<u8> state(objects.size(), 0);
+        for (usize index = 0; index < objects.size(); ++index) {
+            auto at = static_cast<s32>(index);
+            while (at >= 0 && state[static_cast<usize>(at)] == 0) {
+                const usize slot = static_cast<usize>(at);
+                state[slot] = 1;
+                at = parents ? objects[slot].parent : objects[slot].next;
+            }
+            if (at >= 0 && state[static_cast<usize>(at)] == 1) {
+                throw FormatError("decoded world has a cyclic hierarchy");
+            }
+            at = static_cast<s32>(index);
+            while (at >= 0 && state[static_cast<usize>(at)] == 1) {
+                const usize slot = static_cast<usize>(at);
+                state[slot] = 2;
+                at = parents ? objects[slot].parent : objects[slot].next;
+            }
+        }
+    };
+    acyclic(true);
+    acyclic(false);
+    for (const auto& locator : locators) {
+        if (locator.kind >= LocatorKind::Count || !finite(locator.position) ||
+            !finite(locator.rotation)) {
+            throw FormatError("decoded world has an invalid locator");
+        }
+    }
+    WorldLayout result;
+    result.m_objects = std::move(objects);
+    result.m_locators = std::move(locators);
+    result.m_minBounds = minBounds;
+    result.m_maxBounds = maxBounds;
+    return result;
 }
 
 ItemInfo readItemInfo(const Json& entry) {
@@ -184,7 +258,7 @@ bool WorldLayout::load(const std::filesystem::path& directory) {
             }
         }
     } catch (const std::exception& e) {
-        log::warn("World layout {}: {}", file.string(), e.what());
+        log::warn("World layout {}: {}", paths::utf8(file), e.what());
         m_objects.clear();
         m_locators.clear();
         m_animations.clear();

@@ -19,12 +19,14 @@
 #include "game/characters/NameCheats.h"
 #include "game/characters/Progression.h"
 #include "game/hud/CinematicBars.h"
+#include "game/hud/StatusBox.h"
 #include "game/party/PartyLighting.h"
 #include "game/party/PartyRecords.h"
 #include "game/party/PlayerPowerups.h"
 #include "game/party/TargetAssist.h"
 #include "game/players/EnemyShrink.h"
 #include "game/players/PowerupEffects.h"
+#include "game/scenes/LegendsTraversal.h"
 
 namespace gdl::game {
 
@@ -57,14 +59,17 @@ void PlayScene::pauseGameplaySounds() {
     m_triggerCues.pause(m_audio);
     m_attacks.stopDeathSounds(m_players);
     m_opponents.stopDeathSound();
+    if (m_world && m_world->imported()) {
+        m_world->imported()->pauseSounds();
+    }
 }
 
 bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorld& world,
                      std::span<const PartyMember> party, const PlayOptions& options) {
     close();
     m_context = context;
-    m_mechanics.configure({.aggressorMode = context.config == nullptr ||
-                                            context.config->game.aggressorMode});
+    syncMechanics();
+    m_sim.partyCountOverride = options.partyCount;
     m_device = &device;
     m_world = &world;
     // A character menu can replace the party without replacing the shared tower.
@@ -115,11 +120,10 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
                      context.config != nullptr ? context.config->difficulty.gain() : 1.0f});
     m_sim.refusedPortal = -1;
     m_sim.leaving = false;
+    // The level cuts in: the original wipes the map, the movie's last frame or the transition
+    // picture the moment the level has loaded (fn_8005351C, delete_map_blits), never fading
+    // one out, so nothing is put up over an arriving party.
     m_transition.load(device, context.unpackedRoot);
-    if (options.arriving) {
-        m_transition.cover();
-        m_transition.clearAway();
-    }
     // The window light is restored from the collection after the party has been loaded.
     for (usize i = 0; i < world.layout().objects().size(); ++i) {
         if (world.layout().objects()[i].name == kTempleLight) {
@@ -134,18 +138,18 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
     if (!world.ref().isSecret()) {
         m_hud.showRelics();
     }
-    m_transporters.bind(device, world.layout(), world.itemScope(),
-                        static_cast<s32>(m_players.size()), &world.collision());
+    const s32 partySize = partyCount(static_cast<s32>(m_players.size()));
+    m_transporters.bind(device, world.layout(), world.itemScope(), partySize, &world.collision());
     for (const DroppedItem& item : options.items) {
         world.placeItem(device, item.name, item.position);
     }
-    world.setPlayerCount(static_cast<s32>(m_players.size()));
+    world.setPlayerCount(partySize);
     if (!world.isTower()) {
         const PlacedItems& items = world.placedItems();
         for (usize i = 0; i < items.size(); ++i) {
             const auto& item = items.item(i);
             if (item.subtype == ItemInfo::kRunestone && !item.taken &&
-                item.shownTo(static_cast<s32>(m_players.size()))) {
+                item.shownTo(partySize)) {
                 m_sim.runeItem = i;
                 m_sim.runeMeter.begin(item.value, item.position,
                                       world.layout().maxBounds() - world.layout().minBounds(),
@@ -166,11 +170,15 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
         close();
         return false;
     }
-    m_fixtures.setPlayerCount(static_cast<s32>(m_players.size()));
+    m_fixtures.setPlayerCount(partySize);
     m_opponents.open({device, world, m_weapons, m_effects, m_audio, context.unpackedRoot,
                       context.config != nullptr ? context.config->difficulty.gain() : 1.0f, true},
                      m_players);
     m_opponents.setMechanics(&m_mechanics);
+    m_opponents.setPartyCount(m_sim.partyCountOverride);
+    if (auto* imported = world.imported()) {
+        imported->updateGenerators(m_opponents.importedGeneratorStates());
+    }
     // Native texture names may cross from arena items into the boss archive. Bind only
     // after that archive is loaded; fixtures are cleared before opponents on close.
     ItemArchive* bossArchive = m_opponents.bosses().archive();
@@ -201,6 +209,10 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
                                          runtime.actor.height() * 0.5f});
     }
     m_camera.reset(subjects, world.cameraMarkers(), world.cameraRange(), cameraView());
+    resetSeatCameras(subjects, world.cameraMarkers(), world.cameraRange());
+    if (auto* imported = world.imported()) {
+        imported->resetCamera(subjects);
+    }
     if (const LevelInfo* level = world.level();
         level != nullptr && level->bossCamera.has_value() && bossCameraOn()) {
         m_sim.bossCamera.reset(bossSubject(), subjects, *level->bossCamera, cameraView(),
@@ -247,6 +259,9 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
 }
 
 void PlayScene::close() {
+    if (m_world && m_world->imported()) {
+        m_world->imported()->stopSounds();
+    }
     ++m_openGeneration;
     m_selection.reset();
     m_nativeDigestResources.clear();
@@ -258,6 +273,7 @@ void PlayScene::close() {
     m_presentedClip.reset();
     m_presentedCanvas.reset();
     m_previousCamera.reset();
+    m_previousSeatView.reset();
     m_sim.runeMeter.clear();
     m_sim.runeItem.reset();
     m_runeFrame = nullptr;
@@ -308,6 +324,9 @@ void PlayScene::close() {
     m_auraFrame.reset();
     m_glowSheet = nullptr;
     m_localSeats = 0xF;
+    m_viewSeat = -1;
+    m_previousSeatView.reset();
+    m_sim.soloCameras = false;
     m_staticTextures.releaseTextures();
     m_sim.welcome.clear();
     m_sim.dimmer.reset();
@@ -326,8 +345,9 @@ void PlayScene::close() {
     m_open = false;
 }
 
-/** Stands the party side by side at the entrance, facing into the tower: the start marker's
- * heading points back out of the door. */
+/** Stands the party side by side at the entrance, facing the way the start marker does: the
+ * original takes the locator's yaw as stored (get_player_pos, gPlayerStartYaw), which points
+ * into the level and, in the tower, in from the door. */
 void PlayScene::spawnParty(std::span<const PartyMember> party, const PlayOptions& options) {
     // Arriving from a realm the party stands where the level marks that realm's way in.
     const WorldLocator* start = m_world->arrivalPoint(options.arrivalWorld, &m_sim.towerAccess);
@@ -335,7 +355,7 @@ void PlayScene::spawnParty(std::span<const PartyMember> party, const PlayOptions
     f32 yaw = 0.0f;
     if (start != nullptr) {
         origin = start->position;
-        yaw = start->rotation.y + kPi;
+        yaw = start->rotation.y;
     } else if (!options.position.has_value()) {
         log::warn("Tower: no entrance start point; the party stands at the origin");
     }
@@ -426,6 +446,28 @@ bool PlayScene::weaponHeld(s32 player) const {
     return false;
 }
 
+void PlayScene::setPartyCountOverride(std::optional<s32> count) {
+    m_sim.partyCountOverride =
+        count.has_value() ? std::optional{std::clamp(*count, 1, kPlayerCount)} : std::nullopt;
+    m_opponents.setPartyCount(m_sim.partyCountOverride);
+    if (m_open) {
+        m_fixtures.setPlayerCount(partyCount(static_cast<s32>(m_players.size())));
+    }
+}
+
+s32 PlayScene::partyCount(s32 present) const {
+    return m_sim.partyCountOverride.has_value() ? std::clamp(*m_sim.partyCountOverride, 1, kPlayerCount)
+                                                : present;
+}
+
+/** The additive mechanics follow the settings as they stand, so switching Aggressor Mode off
+ * in the menu takes the meter down and calms the swarm on the next tick, and switching it on
+ * brings them back; online every peer reads the same agreed rules. */
+void PlayScene::syncMechanics() {
+    m_mechanics.configure(
+        {.aggressorMode = m_context.config != nullptr && m_context.config->game.aggressorMode});
+}
+
 /** A run of close blows is praised once it pauses (player.c 2553), unless the boss's wizard
  * has begun his visit (good_wiz_state past 2). */
 void PlayScene::praiseStreaks(f32 seconds) {
@@ -470,22 +512,6 @@ void PlayScene::drawStreakMeter() {
     m_streakMeter.observe(std::span(views).first(watched));
     m_streakMeter.animate(seconds);
     m_streakMeter.draw(m_canvas, m_messages.text(), m_glowSheet, m_context.strings);
-}
-
-std::string PlayScene::spikeReport() const {
-    if (!m_open) {
-        return {};
-    }
-    const Enemies& enemies = m_opponents.enemies();
-    const Generators& generators = m_opponents.generators();
-    const SwarmAggression& aggression = m_opponents.aggression();
-    return std::format(" | enemies {}/{} seen of {} slots, aura on {}, huts frenzied {} births "
-                       "tried {}, missiles {}+{}, strikes {}, effects {}, heat {:.2f} rage {:.2f}",
-                       enemies.count(), enemies.inView(), enemies.most(), enemies.auraBodies(),
-                       generators.frenziedHuts(), generators.birthsTried(),
-                       m_opponents.missiles().count(), m_arsenal.missiles().count(),
-                       m_attacks.strikes().count(), m_effects.count(), aggression.heat,
-                       aggression.rage);
 }
 
 PartyPickups::Services PlayScene::pickupServices() {
@@ -564,6 +590,10 @@ bool PlayScene::relocate(const Vec3& position) {
         return false;
     }
     m_camera.reset(subjects, m_world->cameraMarkers(), m_world->cameraRange(), cameraView());
+    resetSeatCameras(subjects, m_world->cameraMarkers(), m_world->cameraRange());
+    if (auto* imported = m_world->imported()) {
+        imported->resetCamera(subjects);
+    }
     return true;
 }
 
@@ -667,7 +697,7 @@ LevelFixtures::Events PlayScene::fixtureEvents() {
 }
 void PlayScene::updateFixtures(s32 ticks, f32 seconds) {
     m_fixtures.update(ticks, seconds, m_players, fixtureEvents());
-    const CameraFrame ear = CameraFrame::of(simulationCamera());
+    const CameraFrame ear = CameraFrame::of(presentedCamera());
     const Vec3 attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
     for (const usize index : m_fixtures.traps().wakes()) {
         const auto& trap = m_fixtures.traps().trap(index);
@@ -733,7 +763,11 @@ void PlayScene::updateEnemies(s32 ticks, f32 seconds) {
         m_fixtures.worldExplosion(position, m_players, fixtureEvents());
     }
     for (const RockHit& hit : m_opponents.takeRockHits()) {
-        m_fixtures.strikeSafeRock(hit.rock, hit.damage);
+        if (auto* imported = m_world->imported(); imported && hit.rock >= kImportedArenaBase) {
+            imported->strike(static_cast<s32>(hit.rock), hit.damage, 0, -1);
+        } else {
+            m_fixtures.strikeSafeRock(hit.rock, hit.damage);
+        }
     }
     for (const PickupBlastReach& blast : m_opponents.takePickupBlasts()) {
         m_fixtures.blastPickups(blast.position, blast.radius, blast.damage, blast.flags, m_players,
@@ -756,12 +790,35 @@ void PlayScene::watchOpponents(bool standPlaced) {
     const CameraView view = cameraView();
     const WorldCamera camera = simulationCamera();
     Vec3 attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
+    if (const auto* imported = m_world->imported()) {
+        attention = imported->cameraAttention().value_or(attention);
+    }
     if (m_sim.switchCutscene.showing()) {
         // TriggerCamUpdate uses the shot's eye as gCameras[0].attn for placement range.
         attention = camera.position;
     }
-    m_opponents.watch(ViewVolume::of(camera, view.horizontalFov, view.aspect), attention,
-                      standPlaced);
+    const auto volume = ViewVolume::of(camera, view.horizontalFov, view.aspect);
+    if (auto* imported = m_world->imported()) {
+        imported->watch(volume);
+    }
+    if (soloViewActive() && !scriptedCamera()) {
+        // Under solo cameras what any standing seat's camera sees is on screen, a generator
+        // judged against the camera looking its way.
+        ViewSet views;
+        for (usize i = 0; i < m_players.size(); ++i) {
+            const s32 seat = m_players[i].actor.player();
+            if (isDown(i) || seat < 0 || seat >= kPlayerCount) {
+                continue;
+            }
+            views.add(ViewVolume::of(cameraOfSeat(seat), view.horizontalFov, view.aspect),
+                      seatCamera(seat).attention());
+        }
+        if (views.count > 0) {
+            m_opponents.watch(views, standPlaced);
+            return;
+        }
+    }
+    m_opponents.watch(volume, attention, standPlaced);
 }
 
 LevelOpponents::Events PlayScene::opponentEvents() {
@@ -781,7 +838,18 @@ LevelOpponents::Events PlayScene::opponentEvents() {
             },
         .fallen =
             [this](const Vec3& position) {
-                m_bossSequence.fallen(position, m_opponents.bosses(), m_players);
+                if (auto* imported = m_world->imported()) {
+                    std::vector<PlayerActor*> survivors;
+                    for (auto& player : m_players) {
+                        if (!player.departed && player.life == PlayerLife::Standing) {
+                            survivors.push_back(&player.actor);
+                        }
+                    }
+                    imported->bossDefeated(position + m_opponents.bosses().rewardOffset(),
+                                           survivors);
+                } else {
+                    m_bossSequence.fallen(position, m_opponents.bosses(), m_players);
+                }
             },
         .spew =
             [this](const CombatSpew& spew) {
@@ -800,18 +868,36 @@ LevelOpponents::Events PlayScene::opponentEvents() {
             },
         .blocksBreath =
             [this](const Vec3& from, const Vec3& to) {
+                if (const auto* imported = m_world->imported()) {
+                    return imported->arenaBlocksSegment(from, to, 0.5f);
+                }
                 return m_fixtures.safeRocks().blocksBreath(from, to);
             },
         .blocksArea =
             [this](const Vec3& from, const Vec3& to) {
                 constexpr f32 kAreaProbeRadius = 0.1f;
+                if (const auto* imported = m_world->imported()) {
+                    return imported->arenaBlocksSegment(from, to, kAreaProbeRadius);
+                }
                 return m_fixtures.safeRocks().blocksSegment(from, to, kAreaProbeRadius);
             },
-        .arenaAnchors = [this] { return m_fixtures.safeRocks().attackAnchors(); },
-        .arenaTargets = [this] { return m_fixtures.safeRocks().arenaTargets(); },
+        .arenaAnchors =
+            [this] {
+                return m_world->imported() ? m_world->imported()->arenaAnchors()
+                                           : m_fixtures.safeRocks().attackAnchors();
+            },
+        .arenaTargets =
+            [this] {
+                return m_world->imported() ? m_world->imported()->arenaTargets()
+                                           : m_fixtures.safeRocks().arenaTargets();
+            },
         .activateArena =
             [this](const CombatArenaActivation& activation) {
-                m_fixtures.safeRocks().scheduleActivation(activation.index, activation.delay);
+                if (auto* imported = m_world->imported()) {
+                    imported->activateArena(activation);
+                } else {
+                    m_fixtures.safeRocks().scheduleActivation(activation.index, activation.delay);
+                }
             },
         .shake = [this] { m_sim.shake.start(); },
         .help = [this](s32 id, usize i) { return postHelp(id, i); },
@@ -972,6 +1058,11 @@ PlayOutcome PlayScene::update(f64 deltaSeconds, const Inputs& inputs) {
     // Offline play owns no timeline/ledger. These labels are only meaningful to
     // explicit recordStep callers; every fresh offline journal dispatches once.
     const auto step = recordStep(1, 1, deltaSeconds, inputs);
+    if (m_world && m_context.sounds && m_world->imported()) {
+        const Vec3 listener =
+            m_players.empty() ? simulationCamera().position : m_players.front().actor.position();
+        m_world->imported()->playSounds(*m_context.sounds, listener);
+    }
     for (const auto& event : step.journal.events) {
         const auto kind = event.policy == OutputLedger::Policy::Confirmed
                               ? OutputLedger::ActionKind::Commit
@@ -1008,7 +1099,7 @@ PlayScene::RecordedStep PlayScene::recordStep(u64 epoch, u64 tick, f64 deltaSeco
     } const abortSounds{m_recordedAudio};
     if (m_audio.recordingSounds()) {
         m_recordedAudio.beginTick(tick);
-        const auto camera = CameraFrame::of(simulationCamera());
+        const auto camera = CameraFrame::of(presentedCamera());
         m_audio.prepareRecordedFrame({camera.position, camera.right});
     }
     {
@@ -1105,7 +1196,7 @@ void PlayScene::gatherRecordedAudio(const Inputs& inputs, PlayOutcome outcome) {
             hourglass = actor.position();
         }
     }
-    const auto frame = CameraFrame::of(simulationCamera());
+    const auto frame = CameraFrame::of(presentedCamera());
     const auto* level = m_world->level();
     m_audio.gatherLoops(
         listeners, {frame.position, frame.right}, level != nullptr ? level->soundVolume : 1.0f,
@@ -1188,6 +1279,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     if (!m_open) {
         return PlayOutcome::Running;
     }
+    syncMechanics();
     PartyFigures::snapshot(m_players);
     m_effects.capturePresentation();
     m_world->capturePresentation();
@@ -1201,6 +1293,9 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     m_sim.opponentsAdvanced = false;
     m_sim.projectilesAdvanced = false;
     m_previousCamera = scriptedCamera() ? std::nullopt : std::optional{simulationCamera()};
+    m_previousSeatView = soloViewActive() && !scriptedCamera()
+                             ? std::optional{presentedCamera()}
+                             : std::nullopt;
     m_previousBossCamera = bossCameraOn();
     // Application supplies fixed simulation ticks independently of rendered frames.
     const f32 tickRate =
@@ -1208,10 +1303,11 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     const auto ticks =
         std::clamp(static_cast<s32>(std::lround(deltaSeconds * tickRate)), kMinTicks, kMaxTicks);
     const f32 seconds = static_cast<f32>(ticks) / tickRate;
-    // Item availability counts joined players, including those waiting in the tower;
-    // whole-party switch contact separately counts only the standing visitors.
-    const auto joinedPlayers = static_cast<s32>(std::ranges::count_if(
-        m_players, [](const PlayerRuntime& player) { return !player.departed; }));
+    // Item availability counts joined players, including those waiting in the tower (or
+    // the console's party count); whole-party switch contact separately counts only the
+    // standing visitors.
+    const s32 joinedPlayers = partyCount(static_cast<s32>(std::ranges::count_if(
+        m_players, [](const PlayerRuntime& player) { return !player.departed; })));
     m_world->setPlayerCount(joinedPlayers);
     m_audio.setPlayerCount(joinedPlayers);
     m_audio.updateNarration(seconds);
@@ -1272,12 +1368,18 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         // DoExit uses state4, outside msgUpdate's active-reader states1/2/3/5.
         // Dismiss the last lesson instead of freezing its timer through departure.
         m_hud.help().clear();
-        // Departing survivors are held, but another player's death and tower choice
-        // still run until the party can leave together.
+        auto* imported = m_world->imported();
+        const bool nativeDeparture = imported && imported->departure().has_value();
+        // Departing survivors cannot act, but native Legends continues their
+        // current animation tree while its separate spin/shrink clock runs.
+        // Another player's death and tower choice still run until all can leave.
         bool dying = false;
         for (usize i = 0; i < m_players.size(); ++i) {
             PlayerRuntime& runtime = m_players[i];
             if (runtime.life != PlayerLife::Dying) {
+                if (nativeDeparture && runtime.life == PlayerLife::Standing && runtime.figure) {
+                    runtime.figure->animateDeparture(seconds);
+                }
                 continue;
             }
             if (runtime.figure != nullptr) {
@@ -1291,9 +1393,11 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
             }
         }
         answerTowerPrompts(inputs);
-        m_departure.update(ticks);
+        if (!nativeDeparture) {
+            m_departure.update(ticks);
+        }
         m_portals.animate(seconds);
-        if (m_departure.started()) {
+        if (!nativeDeparture && m_departure.started()) {
             std::vector<CameraSubject> subjects;
             for (usize i = 0; i < m_players.size(); ++i) {
                 if (!isDown(i)) {
@@ -1305,11 +1409,22 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
             }
             m_camera.update(subjects, m_world->cameraMarkers(), m_world->cameraRange(),
                             cameraView(), seconds);
+            if (m_sim.soloCameras) {
+                followSeatCameras(partySubjects(m_departure.displacement()), seconds);
+            }
+            if (imported) {
+                imported->followCamera(subjects, seconds);
+            }
         }
-        if (m_departure.finished()) {
+        if (!nativeDeparture && m_departure.finished()) {
             m_transition.comeUp();
         }
         m_world->update(seconds, PlayerPowerups::timeStopped(m_players));
+        if (nativeDeparture) {
+            if (const auto native = imported->departure(); native && native->finished) {
+                m_transition.comeUp();
+            }
+        }
         m_effects.update(seconds);
         updateAmbience();
         return m_transition.covering() && !dying ? PlayOutcome::Travel : PlayOutcome::Running;
@@ -1363,9 +1478,16 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
                                             player.actor.height() * 0.5f});
                     }
                 }
+                const auto everyone = partySubjects(Vec3{0.0f});
                 for (s32 i = 0; i < StartCamera::kWarmSteps; ++i) {
                     m_camera.update(subjects, m_world->cameraMarkers(), m_world->cameraRange(),
                                     cameraView(), 1.0f / TowerCamera::kStepRate);
+                    if (m_sim.soloCameras) {
+                        followSeatCameras(everyone, 1.0f / TowerCamera::kStepRate);
+                    }
+                    if (auto* imported = m_world->imported()) {
+                        imported->followCamera(subjects, 1.0f / TowerCamera::kStepRate);
+                    }
                 }
             }
             m_sim.welcome.arrived(*m_device, m_messages, m_context.strings, m_world->layout(),
@@ -1439,9 +1561,38 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     }
     updateTransporters(ticks, seconds, held);
     m_sim.movementUpdated = !held;
-    const std::vector<CameraSubject> subjects = PartyMotion::step(
-        m_players, inputs, held, bossCameraOn() ? m_sim.bossCamera.yaw() : m_camera.yaw(), ticks,
-        seconds, m_world->collision(), motionEvents());
+    std::vector<PlayerActor> importedBefore;
+    if (m_world->imported()) {
+        importedBefore.reserve(m_players.size());
+        for (const auto& player : m_players) {
+            importedBefore.push_back(player.actor);
+        }
+    }
+    const f32 sharedYaw = m_world->imported() ? simulationCamera().yaw
+                          : bossCameraOn()    ? m_sim.bossCamera.yaw()
+                                              : m_camera.yaw();
+    const std::vector<f32> yaws = movementYaws(sharedYaw);
+    std::vector<CameraSubject> subjects = PartyMotion::step(
+        m_players, inputs, held, yaws, ticks, seconds, m_world->collision(), motionEvents());
+    if (const auto* imported = m_world->imported()) {
+        for (usize i = 0; i < m_players.size(); ++i) {
+            auto& player = m_players[i];
+            if (player.departed || player.life != PlayerLife::Standing || player.ghost ||
+                player.combo.riding || player.capture.active() || player.transport.active()) {
+                continue;
+            }
+            auto& actor = player.actor;
+            const Vec3 corrected = imported->resolveMovement(
+                importedBefore[i].position(), actor.position(), actor.radius(), actor.height());
+            if (glm::distance(corrected, actor.position()) > .00001f ||
+                !std::isfinite(corrected.x) || !std::isfinite(corrected.y) ||
+                !std::isfinite(corrected.z)) {
+                correctImportedSceneryStep(actor, importedBefore[i], m_world->collision(),
+                                           corrected, seconds);
+            }
+            subjects[i] = {actor.position(), actor.followPoint(), actor.height() * .5f};
+        }
+    }
     m_sim.playSeconds += seconds;
     if (!held) {
         PartyRecords::advanceTime(m_players, seconds);
@@ -1461,6 +1612,9 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     m_attacks.updateStrikes(seconds, m_players, attackTargets());
     m_attacks.updateShields(seconds, m_players, attackTargets());
     m_attacks.updateArmour(seconds, m_players, attackTargets());
+    if (auto* imported = m_world->imported()) {
+        imported->updateGenerators(m_opponents.importedGeneratorStates());
+    }
     // The level goes dark for the legend item's rite, as for a great move.
     if (m_opponents.bosses().legend().darkens()) {
         m_sim.dimmer.ask(LegendRite::kDarkening);
@@ -1476,6 +1630,64 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     m_effects.update(seconds);
     if (m_device != nullptr) {
         m_sim.pickups.collect(*m_device, m_players, pickupServices());
+    }
+    if (auto* imported = m_world->imported(); imported && !held) {
+        std::vector<PlayerActor*> standing;
+        for (auto& player : m_players) {
+            if (!player.departed && player.life == PlayerLife::Standing && !player.ghost) {
+                standing.push_back(&player.actor);
+            }
+        }
+        imported->updateParty(standing, seconds,
+                              m_context.config == nullptr ||
+                                  m_context.config->combat.autoActivateItems);
+        imported->affectArea([&](const Vec3& position, f32 radius, f32 damage, u32 flags,
+                                 std::vector<s32>& opponents) {
+            m_opponents.blast(position, radius, damage, opponents, m_players, flags);
+        });
+        for (const auto& hit : imported->takeHazardHits()) {
+            const auto victim = std::ranges::find_if(m_players, [&](const auto& runtime) {
+                return runtime.actor.player() == hit.player;
+            });
+            if (victim != m_players.end()) {
+                hurt(static_cast<usize>(victim - m_players.begin()), hit.damage,
+                     hit.poison    ? HurtKind::Gas
+                     : hit.pierces ? HurtKind::Pierce
+                                   : HurtKind::Blow,
+                     (hit.impact.flags & (PlayerImpact::kKnockBack | PlayerImpact::kKnockDown)) !=
+                         0,
+                     hit.impact);
+            }
+        }
+        for (const auto& receipt : imported->takePickups()) {
+            const auto recipient = std::ranges::find_if(m_players, [&](const auto& player) {
+                return player.actor.player() == receipt.player;
+            });
+            if (recipient != m_players.end()) {
+                if (!receipt.scrollPages.empty()) {
+                    m_messages.openImported(*m_device, receipt.scrollPages, m_context.strings);
+                }
+                // Native collection already granted the item. Reuse only the
+                // common presentation, never the GC grant/campaign dispatcher.
+                m_sim.pickups.presentTaken(receipt.offer, receipt.taking, receipt.name,
+                                           static_cast<usize>(recipient - m_players.begin()),
+                                           m_players, pickupServices());
+            }
+        }
+        // Native transporters may relocate a visitor during this callback.
+        // Frame the corrected body, not the pre-contact PartyMotion snapshot.
+        for (usize i = 0; i < m_players.size(); ++i) {
+            const auto& actor = m_players[i].actor;
+            subjects[i] = {actor.position(), actor.followPoint(), actor.height() * .5f};
+        }
+        if (imported->travelRequested() && !m_sim.leaving) {
+            m_sim.destination = {};
+            m_sim.leaving = true;
+            if (!imported->departure()) {
+                m_departure.begin(*m_device, m_weapons.textures);
+            }
+            m_audio.playNamed(PortalDeparture::kSound, PortalDeparture::kVolume);
+        }
     }
     m_world->updateTriggers(seconds, visitors(), false, occupiedFloors());
     m_fixtures.syncFloors();
@@ -1496,7 +1708,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         startGameOver(); // nobody is left in the game
         return PlayOutcome::Running;
     }
-    if (!held) {
+    if (!held && !m_sim.leaving) {
         // A portal waits for everyone still on their feet.
         std::vector<PortalVisitor> standing;
         standing.reserve(m_players.size());
@@ -1519,7 +1731,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
             return PlayOutcome::Travel;
         }
         const std::optional<usize> reached = m_portals.update(ticks, seconds, standing);
-        const CameraFrame ear = CameraFrame::of(simulationCamera());
+        const CameraFrame ear = CameraFrame::of(presentedCamera());
         m_audio.updateExitFlame(m_portals.flamePosition(standing), {ear.position, ear.right});
         const LevelInfo* level = m_world->level();
         const std::vector<s32> waiting = m_portals.takeWaiting();
@@ -1569,12 +1781,18 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         m_camera.update(followed.empty() ? subjects : followed, m_world->cameraMarkers(),
                         m_world->cameraRange(), cameraView(), seconds);
     }
+    if (m_sim.soloCameras) {
+        followSeatCameras(subjects, seconds);
+    }
+    if (auto* imported = m_world->imported()) {
+        imported->followCamera(followed.empty() ? subjects : followed, seconds);
+    }
     if (m_sim.runeItem) {
         const auto& items = m_world->placedItems();
         const bool available = *m_sim.runeItem < items.size() && !items.item(*m_sim.runeItem).taken;
         const auto cue = m_sim.runeMeter.update(m_camera.attention(), available);
         if (cue != RuneMeter::Cue::None) {
-            const auto frame = CameraFrame::of(simulationCamera());
+            const auto frame = CameraFrame::of(presentedCamera());
             m_audio.announceRune(cue == RuneMeter::Cue::Nearby, m_camera.attention(),
                                  {frame.position, frame.right});
         }
@@ -1594,7 +1812,7 @@ void PlayScene::updateAmbience() {
             listeners.push_back(runtime.actor.position());
         }
     }
-    const CameraFrame frame = CameraFrame::of(simulationCamera());
+    const CameraFrame frame = CameraFrame::of(presentedCamera());
     const LevelInfo* level = m_world->level();
     m_audio.updateAmbience(listeners, AmbientEar{frame.position, frame.right},
                            level != nullptr ? level->soundVolume : 1.0f,
@@ -1662,14 +1880,25 @@ std::vector<s32> PlayScene::occupiedFloors() const {
             if (state && !state->asleep) {
                 if (const s32 floor = enemies.floorOf(enemy); floor >= 0) {
                     out.push_back(floor);
-                } else if (const auto contact =
-                               m_world->collision().floorAt(enemies.positionOf(enemy), 0.1f, 0.1f)) {
+                } else if (const auto contact = m_world->collision().floorAt(
+                               enemies.positionOf(enemy), 0.1f, 0.1f)) {
                     // floorOf retains moving-floor attachment only. Static fade
                     // bridges still support a body (retail's floor_wobj); use
                     // rememberFloor's feet-contact range, never a floor below a jump.
                     out.push_back(contact->object);
                 }
             }
+        }
+    }
+    // The great ones stand on a bridge as the swarm does, and keep it up the same way.
+    const auto& critters = m_opponents.critters();
+    for (s32 critter = 0; static_cast<usize>(critter) < critters.count(); ++critter) {
+        if (!critters.alive(critter)) {
+            continue;
+        }
+        if (const auto contact =
+                m_world->collision().floorAt(critters.positionOf(critter), 0.1f, 0.1f)) {
+            out.push_back(contact->object);
         }
     }
     return out;
@@ -1718,9 +1947,22 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     const f32 projectileBlend = m_sim.projectilesAdvanced ? effectBlend : -1.0f;
     frameBlend = optionsOpen || frameBlend < 0 ? 1.0f : std::clamp(frameBlend, 0.0f, 1.0f);
     const WorldCamera currentCamera = viewCamera();
-    const WorldCamera camera = cameraContinuous() && m_previousCamera
-                                   ? currentCamera.interpolate(*m_previousCamera, frameBlend)
-                                   : currentCamera;
+    const std::optional<WorldCamera>& previousView = previousViewCamera();
+    WorldCamera camera = cameraContinuous() && previousView
+                             ? currentCamera.interpolate(*previousView, frameBlend)
+                             : currentCamera;
+    if (!m_viewOverride && !scriptedCamera()) {
+        if (const auto* imported = m_world->imported()) {
+            if (const auto sampled = imported->camera(frameBlend)) {
+                // The native camera owns its interpolation history. Sampling
+                // it and interpolating m_previousCamera again adds one tick of lag.
+                const f32 distance =
+                    std::max(1.0f, glm::distance(sampled->position, m_camera.attention()));
+                camera =
+                    m_sim.shake.apply(*sampled, sampled->position + sampled->forward() * distance);
+            }
+        }
+    }
     const Mat4 clip = camera.clipTransform(config.horizontalFovRadians(), frameWidth, frameHeight,
                                            frameProjection);
     m_presentedClip = clip;
@@ -1738,6 +1980,8 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     const CameraFrame effectCamera = companionCamera;
     m_fixtures.draw(device, clip, m_world->lighting(), &effectCamera, effectBlend);
     m_opponents.statues().draw(device, clip, m_world->lighting(), &effectCamera);
+    m_opponents.importedActors().draw(device, clip, m_world->lighting(), &effectCamera,
+                                      TreeModel::Pass::DepthWriting, opponentBlend);
     m_opponents.generators().draw(device, clip, m_world->lighting(), opponentBlend,
                                   TreeModel::Pass::Opaque);
     m_opponents.enemies().draw(device, clip, m_world->lighting(), m_figures.hitFlash(), &m_weapons,
@@ -1767,6 +2011,8 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     // authored materials write depth. Otherwise a nearer cloud rejects the shadow.
     drawShadows(device, clip, camera.position, frameBlend, opponentBlend);
     m_world->drawDeferred(device, clip, camera, effectBlend);
+    m_opponents.importedActors().draw(device, clip, m_world->lighting(), &effectCamera,
+                                      TreeModel::Pass::Effects, opponentBlend);
     // GHO's native 0xC01880 sorts its additive, non-depth-writing body after scenery.
     // A fence blended over it instead makes even a nearer ghost appear behind the fence.
     m_opponents.enemies().draw(device, clip, m_world->lighting(), m_figures.hitFlash(), &m_weapons,
@@ -1863,6 +2109,11 @@ void PlayScene::render(RenderDevice& device, const Mat4& frameProjection, f32 fr
     // Rendering can precede the first simulation tick, before PartyNames has observed the hold.
     if (!spawning()) {
         m_names.draw(m_canvas, m_players, clip, canvasProjection, frameBlend);
+    }
+    if (!cut && !optionsOpen && !m_viewOverride) {
+        // The way to each companion off this view, over the world and under the boxes.
+        m_arrows.draw(m_canvas, m_players, arrowOwnSeats(), camera, clip, canvasProjection, width,
+                      height, static_cast<f32>(StatusBoxPainter::kBarY), frameBlend);
     }
     if (!cut) {
         m_hud.drawStatus(m_canvas, m_players);

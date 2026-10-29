@@ -38,7 +38,7 @@ TreePose Combatant::smoothPose(const Actor& actor) {
     for (usize i = 0; i < std::min(native.size(), actual.size()); ++i) {
         if (native[i].rotation != actual[i].rotation || native[i].position != actual[i].position ||
             native[i].scale != actual[i].scale ||
-            native[i].pitchYawRoll != actual[i].pitchYawRoll) {
+            native[i].rotationOrder != actual[i].rotationOrder) {
             pose.setNodePose(i, actual[i]);
         }
     }

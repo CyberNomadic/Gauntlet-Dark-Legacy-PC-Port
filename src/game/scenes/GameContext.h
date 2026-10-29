@@ -8,6 +8,7 @@
 #include "engine/audio/SoundPlayer.h"
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
+#include "engine/render/RenderTypes.h"
 
 #include "game/characters/Party.h"
 #include "game/config/ControlProfiles.h"
@@ -39,6 +40,8 @@ struct GameContext {
     std::function<DisplayOptions()> displayOptions;
     /** Applies a temporary Video trial without writing settings. */
     std::function<bool(const GameConfig&)> previewVideo;
+    /** The graphics API drawing now; the Video page says a restart is needed for another. */
+    GraphicsApi renderer = GraphicsApi::Vulkan;
     std::function<void(s32, s32, ControlFeedback)> vibrate; ///< input player id, frames and cue
     std::function<void()> stopVibration;
     /** A completed secret challenge grants shared class availability, even before saving. */

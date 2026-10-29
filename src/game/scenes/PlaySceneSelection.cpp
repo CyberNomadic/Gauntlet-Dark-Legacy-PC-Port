@@ -15,6 +15,7 @@
 #include "game/critters/CombatantKind.h"
 #include "game/enemies/EnemyKinds.h"
 #include "game/level/PlacedItems.h"
+#include "game/console/ConsoleCommands.h"
 #include "game/scenes/PlayScene.h"
 #include "game/scenes/SceneSelection.h"
 
@@ -219,6 +220,44 @@ std::optional<SceneSelection> PlayScene::pick(Vec2 cursor) {
                                       std::max(item.height, kPickupReach));
         consider(hit, size,
                  SceneSelection{SceneSelection::Kind::Pickup, static_cast<s32>(i), item.name});
+    }
+    // The switches' pads, the gates and the chests: the console names what they drive.
+    const LevelTriggers& triggers = m_world->triggers();
+    for (usize i = 0; i < triggers.size(); ++i) {
+        const LevelTrigger& trigger = triggers.trigger(i);
+        if (trigger.chained || !trigger.enabled) {
+            continue;
+        }
+        const auto [hit, size] = body(Vec3{trigger.placement[3]},
+                                      std::max(trigger.radius, kPickupReach),
+                                      std::max(trigger.height, kPickupReach));
+        consider(hit, size,
+                 SceneSelection{SceneSelection::Kind::Switch, static_cast<s32>(i),
+                                ConsoleCommands::instanceName(layout, trigger.instance)});
+    }
+    const LockedGates& gates = m_fixtures.gates();
+    for (usize i = 0; i < gates.size(); ++i) {
+        const LockedGates::Gate& gate = gates.gate(i);
+        if (!gate.shown) {
+            continue;
+        }
+        const f32 reach = std::max({gate.box.halfAcross, gate.box.halfAlong, kPickupReach});
+        const auto [hit, size] = body(gate.figure.position(), reach, reach * 2.0f);
+        consider(hit, size,
+                 SceneSelection{SceneSelection::Kind::Gate, static_cast<s32>(i),
+                                ConsoleCommands::instanceName(layout, gate.instance)});
+    }
+    const Chests& chests = m_fixtures.chests();
+    for (usize i = 0; i < chests.size(); ++i) {
+        const Chests::Chest& chest = chests.chest(i);
+        if (!chest.shown || chest.gone) {
+            continue;
+        }
+        const f32 reach = std::max({chest.box.halfAcross, chest.box.halfAlong, kPickupReach});
+        const auto [hit, size] = body(chest.figure.position(), reach, reach * 2.0f);
+        consider(hit, size,
+                 SceneSelection{SceneSelection::Kind::Chest, static_cast<s32>(i),
+                                ConsoleCommands::instanceName(layout, chest.instance)});
     }
     for (const PlayerRuntime& runtime : m_players) {
         if (runtime.departed || runtime.life != PlayerLife::Standing) {

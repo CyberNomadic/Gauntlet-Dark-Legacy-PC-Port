@@ -22,6 +22,17 @@ gdl::u8 seatMask(std::span<const gdl::u8> seats) {
     return mask;
 }
 
+/** The lowest seat this machine plays, whose camera it looks through under solo cameras. */
+gdl::s32 lowestSeat(std::span<const gdl::u8> seats) {
+    gdl::s32 lowest = -1;
+    for (const gdl::u8 seat : seats) {
+        if (lowest < 0 || seat < lowest) {
+            lowest = seat;
+        }
+    }
+    return lowest;
+}
+
 } // namespace
 
 namespace gdl::game {
@@ -604,6 +615,9 @@ struct NativeOnlinePlay::Data {
                 return false;
             }
             candidate->scene.setLocalSeats(seatMask(session->seats()));
+            candidate->scene.setSoloCameras(context.config != nullptr &&
+                                            context.config->multiplayer.soloCamera);
+            candidate->scene.setViewSeat(lowestSeat(session->seats()));
             for (usize seat = 0; seat < consoleCheats.size(); ++seat) {
                 candidate->scene.setCheats(static_cast<s32>(seat), consoleCheats[seat]);
             }
@@ -694,6 +708,9 @@ struct NativeOnlinePlay::Data {
             return fail(Failure::Assets);
         }
         candidate->scene.setLocalSeats(seatMask(session->seats()));
+        candidate->scene.setSoloCameras(context.config != nullptr &&
+                                        context.config->multiplayer.soloCamera);
+        candidate->scene.setViewSeat(lowestSeat(session->seats()));
         for (usize seat = 0; seat < levelConsoleCheats.size(); ++seat) {
             candidate->scene.setCheats(static_cast<s32>(seat), levelConsoleCheats[seat]);
         }

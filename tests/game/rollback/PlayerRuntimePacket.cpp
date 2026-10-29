@@ -219,6 +219,12 @@ template <class A, class T> void progress(A& archive, T& value) {
     }
     numbers(archive, value.lifetime.enemiesKilled, value.lifetime.generatorsDestroyed,
             value.lifetime.goldFound, value.lifetime.playSeconds, value.lifetime.bestStreak);
+    for (auto& campaign : value.legends) {
+        numbers(archive, campaign.runestones, campaign.shards, campaign.obelisks,
+                campaign.legendItems);
+        sequence(archive, campaign.completedMaps, LegendsProgress::kMaxCompletedMaps, 4,
+                 [](auto& a, auto& name) { text(a, name, LegendsProgress::kMaxMapName); });
+    }
 }
 template <class A, class T> void save(A& archive, T& value) {
     text(archive, value.name, kCharacterNameLength);
@@ -253,7 +259,14 @@ template <class A, class T> void companionPose(A& archive, T& value) {
         vector(a, node.rotation);
         vector(a, node.position);
         vector(a, node.scale);
-        a.number(node.pitchYawRoll);
+        u8 order = static_cast<u8>(node.rotationOrder);
+        a.number(order);
+        if (order > static_cast<u8>(NodePose::RotationOrder::YawPitchRoll)) {
+            throw FormatError("invalid participant rotation order");
+        }
+        if constexpr (std::remove_reference_t<decltype(a)>::reading) {
+            node.rotationOrder = static_cast<NodePose::RotationOrder>(order);
+        }
     });
 }
 template <class A, class T> void companionClock(A& archive, T& value) {

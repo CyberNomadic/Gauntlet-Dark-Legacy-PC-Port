@@ -85,22 +85,6 @@ template <class T> bool sameNativeField(const T& left, const T& right) {
     return left == right;
 }
 
-bool sameNativeField(const std::optional<ViewVolume>& left,
-                     const std::optional<ViewVolume>& right) {
-    if (left.has_value() != right.has_value()) {
-        return false;
-    }
-    bool equal = true;
-    if (left) {
-        visitNativeFields<8>(*left, [&](const auto&... first) {
-            visitNativeFields<8>(*right, [&](const auto&... second) {
-                equal = std::tie(first...) == std::tie(second...);
-            });
-        });
-    }
-    return equal;
-}
-
 constexpr f32 kPi = std::numbers::pi_v<f32>;
 // Height of the horizontal wall slice above the supported feet.
 constexpr f32 kWallHeight = 2.0f;
@@ -163,11 +147,6 @@ bool checkpointMind(const MindMemory& mind) {
                                    mind.zigZag.count, mind.zigZag.side, mind.zigZag.spread,
                                    mind.zigZag.hold, mind.zigZag.swings},
         [](s32 value) { return checkpointCounter(value); });
-}
-
-auto checkpointView(const ViewVolume& view) {
-    return std::tie(view.position, view.right, view.up, view.forward, view.sinX, view.cosX,
-                    view.sinY, view.cosY);
 }
 
 bool checkpointEvent(const EnemyBlow& value) {
@@ -441,10 +420,7 @@ bool Enemies::Checkpoint::valid() const {
             return false;
         }
     }
-    if (view && (!checkpointPoint(view->position) || !checkpointPoint(view->right) ||
-                 !checkpointPoint(view->up) || !checkpointPoint(view->forward) ||
-                 !checkpointNumber(view->sinX, -1, 1) || !checkpointNumber(view->cosX, -1, 1) ||
-                 !checkpointNumber(view->sinY, -1, 1) || !checkpointNumber(view->cosY, -1, 1))) {
+    if (view && !view->bounded(kCheckpointMagnitude)) {
         return false;
     }
     for (usize index = 0; index < lookouts.points.size(); ++index) {
@@ -520,8 +496,7 @@ bool Enemies::Checkpoint::operator==(const Checkpoint& other) const {
                         value.inView, value.frame, value.pendingTicks, value.pendingSeconds,
                         value.shrink);
     };
-    return fields(*this) == fields(other) && view.has_value() == other.view.has_value() &&
-           (!view || checkpointView(*view) == checkpointView(*other.view));
+    return fields(*this) == fields(other) && view == other.view;
 }
 
 std::optional<Enemies::Checkpoint> Enemies::checkpoint() const {
@@ -805,10 +780,10 @@ void Enemies::appendSimulationDigest(
                 digest.value(static_cast<const BodyState&>(enemy));
                 digest.value(enemy.animator);
             }
-        } else if constexpr (std::is_same_v<T, std::optional<ViewVolume>>) {
+        } else if constexpr (std::is_same_v<T, std::optional<ViewSet>>) {
             digest.flag(field.has_value());
             if (field) {
-                digest.fields<8>(*field);
+                digest.value(*field);
             }
         } else {
             digest.value(field);
@@ -866,8 +841,23 @@ void Enemies::open(RenderDevice& device, const std::filesystem::path& unpackedRo
     m_root = unpackedRoot;
     m_collision = collision;
     m_simulation.most = std::clamp(most, 1, kMost);
+    m_levelCap = m_simulation.most;
     m_simulation.scales = scales;
     m_simulation.random.seed(seed);
+}
+
+void Enemies::narrowPool() {
+    if (m_simulation.most <= m_levelCap) {
+        return;
+    }
+    // The slots past the cap leave play from the top down, each as the body in it goes.
+    s32 most = m_levelCap;
+    for (s32 i = m_levelCap; i < m_simulation.most; ++i) {
+        if (m_simulation.enemies[static_cast<usize>(i)].state != State::Inactive) {
+            most = i + 1;
+        }
+    }
+    m_simulation.most = most;
 }
 
 void Enemies::close() {
@@ -3033,7 +3023,7 @@ std::optional<Enemies::Presentation> Enemies::presentation(s32 id) const {
 void Enemies::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                    const Texture* hitFlash, ItemArchive* weapons, const CameraFrame* camera,
                    f32 presentationAlpha, TreeModel::Pass pass) {
-    // Past the bravery line the swarm darkens to red and an aura, beating with the ticks,
+    // As the run nears S the swarm darkens to red and an aura, beating with the ticks,
     // marks each body out the way the console's selection is, in its red.
     const f32 aura = m_aggression.aura();
     std::optional<SelectionHighlight> rage;

@@ -14,6 +14,7 @@ namespace object_flags {
 inline constexpr u32 kNoDepthTest = 0x40;      ///< drawn without the depth compare
 inline constexpr u32 kNoDepthWrite = 0x80;     ///< leaves the depth buffer alone
 inline constexpr u32 kSorted = 0x800;          ///< may join the deferred, depth-sorted queue
+inline constexpr u32 kNoLightmap = 0x4000;     ///< drawn flat without its lightmap (pbSetDORegs)
 inline constexpr u32 kChrome = 0x8000;         ///< environment-mapped by its normals
 inline constexpr u32 kSortBack = 0x80000;      ///< deferred key less 10000
 inline constexpr u32 kDistanceFade = 0x100400; ///< faded by view depth; deferred key less 30000

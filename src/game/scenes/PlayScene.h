@@ -1,9 +1,9 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <memory>
-#include <chrono>
 #include <optional>
 #include <span>
 #include <string>
@@ -34,12 +34,12 @@
 #include "game/effects/EffectTrees.h"
 #include "game/enemies/LevelOpponents.h"
 #include "game/hud/ChallengeHud.h"
+#include "game/hud/CompanionArrows.h"
 #include "game/hud/CompassHud.h"
 #include "game/hud/LevelMessages.h"
 #include "game/hud/PartyHud.h"
 #include "game/hud/RuneMeter.h"
 #include "game/hud/StreakMeter.h"
-#include "game/mechanics/MechanicsFacade.h"
 #include "game/level/ExitPortals.h"
 #include "game/level/LevelFixtures.h"
 #include "game/level/LevelTransporters.h"
@@ -50,6 +50,7 @@
 #include "game/level/SwitchCutscene.h"
 #include "game/level/TowerAccess.h"
 #include "game/level/TriggerCues.h"
+#include "game/mechanics/MechanicsFacade.h"
 #include "game/party/PartyFigures.h"
 #include "game/party/PartyMotion.h"
 #include "game/party/PartyNames.h"
@@ -62,8 +63,8 @@
 #include "game/players/PlayerActor.h"
 #include "game/players/PlayerAnimator.h"
 #include "game/players/TurboMeter.h"
-#include "game/rollback/FrameEventLedger.h"
 #include "game/rollback/ConsoleAction.h"
+#include "game/rollback/FrameEventLedger.h"
 #include "game/rollback/SimulationObservation.h"
 #include "game/scenes/GameContext.h"
 #include "game/scenes/SceneSelection.h"
@@ -93,8 +94,11 @@ struct PlayOptions {
     std::vector<DroppedItem> items; ///< dropped about the level once it opens
     u32 arrivalWorld = 0;           ///< the realm the party comes from, which picks the start point
                                     ///< it arrives at (none: the level's own entrance)
-    bool arriving = false;          ///< the party comes through a portal: the transition picture is
-                                    ///< up as the level opens, and clears
+    bool arriving = false;          ///< the party comes through a portal (the level still cuts
+                                    ///< in, as the original's does; kept for the online setup)
+    /** The party size the level sets itself up for (its items, gates and generators) instead
+     * of the players present: the console's party count; none follows the players. */
+    std::optional<s32> partyCount;
 };
 
 enum class PlayOutcome : u8 {
@@ -161,7 +165,7 @@ private:
      * and persistent save-slot identities stay in their existing owners. */
     struct Simulation {
         friend void visitNativeState(NativeStateDigest& digest, const Simulation& value) {
-            digest.fields<26>(value);
+            digest.fields<28>(value);
         }
         BossCamera bossCamera;
         GameOver gameOver;
@@ -189,6 +193,8 @@ private:
         std::array<ConsoleCheats, static_cast<usize>(kPlayerCount)> cheats{};
         std::optional<ConsoleTravelRequest> consoleTravel;
         u32 consoleSpawns = 0;
+        std::optional<s32> partyCountOverride; ///< the console's party count, when set
+        bool soloCameras = false; ///< each seat looks through its own camera (a netplay rule)
 
         bool operator==(const Simulation&) const = default;
     };
@@ -292,6 +298,10 @@ public:
     /** The pause menu holds the level's sounds and speech where they are, and lets them go. */
     void holdSounds() { m_audio.holdSounds(); }
     void releaseSounds() { m_audio.releaseSounds(); }
+    /** Application boundary for parking a live scene behind an imported level.
+     * Stops only this scene's voices; never holds the shared effects category. */
+    void suspendForImportedLevel();
+    void resumeAfterImportedLevel();
     void render(RenderDevice& device, const Mat4& frameProjection, f32 frameWidth, f32 frameHeight,
                 bool optionsOpen = false, f32 frameBlend = -1.0f);
 
@@ -410,6 +420,15 @@ public:
     /** The live record of `player`'s character, for the developer console to edit; null when
      * that player is not in. A level set there reaches the actor through restat(). */
     CharacterSave* liveSave(s32 player);
+    /** The developer console presses a switch: on the next tick it goes off as if the whole
+     * party stood on it, the camera following what it opens. False for one the party cannot
+     * use, or none. */
+    bool pressSwitch(usize index);
+    /** The developer console opens a gate without a key, or shuts it again. */
+    bool unlockGate(usize index);
+    bool lockGate(usize index);
+    /** The developer console makes a chest want a key, or open without one. */
+    bool setChestLocked(usize index, bool locked);
     /** Gives `player`'s actor the pace its record's class and level allow now. */
     void restat(s32 player);
     /** Stands everyone standing at `position`, a pace apart, and the camera up over them,
@@ -418,6 +437,13 @@ public:
     /** What the developer console grants a player. */
     void setCheats(s32 player, const ConsoleCheats& cheats);
     const ConsoleCheats& cheats(s32 player) const;
+    /** The party size the level sets itself up for from now on, or none to follow the
+     * players present: what is placed for a larger party appears, and the generators breed
+     * for it, on the next tick. */
+    void setPartyCountOverride(std::optional<s32> count);
+    std::optional<s32> partyCountOverride() const { return m_sim.partyCountOverride; }
+    /** The party size the level is set up for: the override, else `present`. */
+    s32 partyCount(s32 present) const;
     const std::optional<ConsoleTravelRequest>& consoleTravelRequest() const {
         return m_sim.consoleTravel;
     }
@@ -428,8 +454,22 @@ public:
      * Presentation only; every seat until told otherwise. */
     void setLocalSeats(u8 mask) { m_localSeats = mask; }
     const StreakMeter& streakMeter() const { return m_streakMeter; }
-    /** What the level is doing, for a frame spike's line in the log. */
-    std::string spikeReport() const;
+    /** Solo cameras, the netplay room's rule: each seat's own single-player camera, with
+     * what any of them sees counting as on screen and nothing holding the party together.
+     * The shared camera keeps following underneath for the hand-offs to the boss and
+     * scripted cameras; the seats' cameras follow only under the rule, resting where the
+     * level stood them up otherwise. Gameplay state, the same on every peer. */
+    void setSoloCameras(bool solo) { m_sim.soloCameras = solo; }
+    bool soloCameras() const { return m_sim.soloCameras; }
+    /** Whether the seats look through their own cameras now: solo cameras, with neither a
+     * boss camera nor an imported level's own in charge. */
+    bool soloViewActive() const;
+    /** The seat whose camera this machine looks through under solo cameras; below nought,
+     * the lowest standing one. Presentation only. */
+    void setViewSeat(s32 seat) { m_viewSeat = seat; }
+    s32 viewSeat() const { return m_viewSeat; }
+    const TowerCamera& seatCamera(s32 seat) const;
+    const CompanionArrows& companionArrows() const { return m_arrows; }
     /** Looks through `camera` instead of the level's own, for the developer console's free
      * camera; nothing gives the level's back. Either change cuts rather than glides. */
     void setViewOverride(const std::optional<WorldCamera>& camera);
@@ -570,6 +610,30 @@ private:
     void drawShadows(RenderDevice& device, const Mat4& clip, const Vec3& eye, f32 frameBlend,
                      f32 opponentBlend);
     bool scriptedCamera() const;
+    /** The camera this machine looks through: the seat's own under solo cameras, else the
+     * shared one. The previous is its last tick's, for the frame's interpolation. */
+    WorldCamera presentedCamera() const;
+    const std::optional<WorldCamera>& previousViewCamera() const;
+    /** The seat shown here: the view seat while it is in the party, else the lowest standing. */
+    s32 presentedSeat() const;
+    WorldCamera cameraOfSeat(s32 seat) const; ///< shaken like the shared one
+    /** The camera `actor` plays against: its seat's own under solo cameras, else the shared. */
+    WorldCamera cameraFor(const PlayerActor& actor) const;
+    /** The yaw each member's stick is read against, `shared` unless solo cameras hold. */
+    std::vector<f32> movementYaws(f32 shared) const;
+    /** The seats whose companions the arrows point to: the shown seat alone under solo
+     * cameras, else this machine's. */
+    u8 arrowOwnSeats() const;
+    using SeatCameraStates = std::array<TowerCamera::State, static_cast<usize>(kPlayerCount)>;
+    SeatCameraStates seatCameraStates() const;
+    /** One subject per party member, in party order, moved by `displacement`. */
+    std::vector<CameraSubject> partySubjects(const Vec3& displacement) const;
+    /** The seats' cameras, each on its own standing character and a fallen one's with the
+     * party, stood up, following for `seconds` or snapped to the party like the shared one. */
+    void resetSeatCameras(std::span<const CameraSubject> subjects,
+                          std::span<const WorldLocator> markers, const CameraRange& range);
+    void followSeatCameras(std::span<const CameraSubject> subjects, f32 seconds);
+    void snapSeatCameras(std::span<const CameraSubject> subjects);
     void watchOpponents(bool standPlaced = true);
     void gatherLights();
     void beginChallenge();
@@ -583,6 +647,8 @@ private:
     std::vector<s32> occupiedFloors() const;
     PartyPickups::Services pickupServices();
     void praiseStreaks(f32 seconds);
+    /** Reads the settings' additive mechanics into the facade, every tick and at opening. */
+    void syncMechanics();
     /** Steps the meter by the frame's own clock and draws it for the local seats. */
     void drawStreakMeter();
     bool leaveBy(usize portal);
@@ -647,9 +713,11 @@ private:
     PartyHud m_hud;
     Canvas m_canvas;
     TowerCamera m_camera;
+    std::array<TowerCamera, static_cast<usize>(kPlayerCount)> m_seatCameras; ///< by seat
     std::optional<Mat4> m_presentedClip;
     std::optional<Mat4> m_presentedCanvas; ///< local pointer mapping, never simulation state
     std::optional<WorldCamera> m_previousCamera;
+    std::optional<WorldCamera> m_previousSeatView; ///< this machine's view alone, never digested
     std::optional<WorldCamera> m_viewOverride;
     std::optional<SceneSelection> m_selection;
     std::vector<PlayerRuntime> m_players;
@@ -660,8 +728,9 @@ private:
     bool m_previousBossCamera = false;
     bool m_hudHidden = false;
     u8 m_localSeats = 0xF;
+    s32 m_viewSeat = -1; ///< presentation only: the seat shown here under solo cameras
     bool m_open = false;
-    StreakMeter m_streakMeter;   ///< presentation only, never simulation state
+    StreakMeter m_streakMeter; ///< presentation only, never simulation state
     std::optional<std::chrono::steady_clock::time_point> m_streakFrame;
     std::optional<std::chrono::steady_clock::time_point> m_auraFrame; ///< the elemental show's
     const Texture* m_glowSheet = nullptr; ///< FONT32's glow, borrowed from the static set
@@ -706,6 +775,7 @@ private:
     PortalDeparture m_departure;
     PartyFigures m_figures;
     PartyNames m_names;
+    CompanionArrows m_arrows; ///< presentation only
 };
 
 } // namespace gdl::game

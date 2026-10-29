@@ -3851,6 +3851,8 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
     players[1].actor.spawn(1, {}, nullptr, Vec3{0}, 0);
     LevelOpponents opponents;
     opponents.open({device, world, weapons, effects, audio, root, 1}, players);
+    const MechanicsFacade aggressor{{.aggressorMode = true}};
+    opponents.setMechanics(&aggressor);
     LevelOpponents::Events events;
     events.settleBlasts = [] {};
     events.advanceLegend = [](f32) {};
@@ -3880,8 +3882,7 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
         opponents.update(1, 1.0f / 60, players, {}, events);
     }
     CHECK(opponents.aggression().heat == Approx(1.0f).margin(0.02f));
-    CHECK(opponents.aggression().rage ==
-          Approx(2.0f / SwarmAggression::kRageSeconds).margin(0.02f));
+    CHECK(opponents.aggression().surge == 0.0f); // at S exactly, nothing past it yet
     CHECK(opponents.enemies().aggression() == opponents.aggression());
     CHECK(opponents.enemies().most() == Enemies::kMost); // the frenzy opened the whole pool
     // The run over, the swarm is itself again on the next tick.
@@ -3890,8 +3891,19 @@ TEST_CASE("the swarm's aggression follows the party's longest run of close blows
     CHECK(LevelOpponents::longestRun(players) == 0);
     opponents.update(1, 1.0f / 60, players, {}, events);
     CHECK(opponents.aggression().heat == 0.0f);
-    CHECK(opponents.aggression().rage == 0.0f);
+    CHECK(opponents.aggression().surge == 0.0f);
     CHECK(opponents.enemies().aggression() == opponents.aggression());
+    // The pool thins back to the level's cap as the extras past it fall; while any still
+    // stands there, the slots up to it stay in play.
+    const Enemies& enemies = opponents.enemies();
+    s32 standing = enemies.levelCap();
+    for (s32 id = enemies.levelCap(); id < Enemies::kMost; ++id) {
+        if (enemies.alive(id) || enemies.dying(id)) {
+            standing = id + 1;
+        }
+    }
+    CHECK(enemies.levelCap() < Enemies::kMost);
+    CHECK(enemies.most() == standing);
     opponents.close();
 }
 

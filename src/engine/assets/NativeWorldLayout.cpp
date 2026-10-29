@@ -8,6 +8,7 @@
 #include "engine/core/Strings.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/WorldFile.h"
 
@@ -104,7 +105,7 @@ bool WorldLayout::loadNative(const std::filesystem::path& file) {
         resolveParents();
         return loaded();
     } catch (const std::exception& e) {
-        log::warn("Native world layout {}: {}", file.string(), e.what());
+        log::warn("Native world layout {}: {}", paths::utf8(file), e.what());
         *this = WorldLayout{};
         return false;
     }

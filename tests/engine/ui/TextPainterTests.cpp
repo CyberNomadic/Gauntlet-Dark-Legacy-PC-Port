@@ -107,6 +107,41 @@ TEST_CASE("glyphs are drawn as cells of the sheet in one batch", "[ui][text]") {
     REQUIRE(sawCellB);
 }
 
+TEST_CASE("a cut glyph draws its part of the sheet where its cell places it", "[ui][text]") {
+    BitmapFont font = sampleFont();
+    REQUIRE(font.addCut({.code = '-',
+                         .from = 'B',
+                         .left = 2,
+                         .top = 4,
+                         .columns = 5,
+                         .rows = 3,
+                         .width = 7,
+                         .lead = 1,
+                         .at = 5}));
+    const test::FakeTexture sheet{32, 16};
+    test::FakeRenderDevice device;
+    TextPainter painter;
+    painter.setFont(&font, &sheet);
+    REQUIRE(painter.measure("A-A") == 19); // the cut's cell advances by its width
+    Canvas canvas;
+    canvas.begin(device, Mat4{1.0f});
+    TextStyle style;
+    style.scale = 2.0f;
+    painter.draw(canvas, 10, 20, "-", style);
+    canvas.end();
+    REQUIRE(device.draws.size() == 1);
+    // Set a lead in and five rows down, scaled twice, with the half-texel inset.
+    REQUIRE(test::minCorner(device.draws[0]).x == Approx(13.0f));
+    REQUIRE(test::minCorner(device.draws[0]).y == Approx(31.0f));
+    REQUIRE(test::maxCorner(device.draws[0]).x == Approx(21.0f));
+    REQUIRE(test::maxCorner(device.draws[0]).y == Approx(35.0f));
+    bool sawPart = false;
+    for (const ImmediateVertex& v : device.draws[0].vertices) {
+        sawPart = sawPart || (v.uv.x == Approx(8.5f / 32.0f) && v.uv.y == Approx(4.5f / 16.0f));
+    }
+    REQUIRE(sawPart);
+}
+
 TEST_CASE("styles scale, recolour, expand and swap the sheet", "[ui][text]") {
     const BitmapFont font = sampleFont();
     const test::FakeTexture sheet{32, 16};

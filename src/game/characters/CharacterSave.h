@@ -89,6 +89,10 @@ public:
     u16 classUnlocks() const { return m_classUnlocks; }
     /** Monotonically merges and atomically persists rewards, even without a character slot. */
     bool unlockClasses(u16 mask);
+    /** Takes rewards away again, for the developer console: from the profile and from the
+     * characters' own records, which would bring them back. False when a file stayed as it
+     * was; the session keeps the change. */
+    bool lockClasses(u16 mask);
 
 private:
     std::filesystem::path m_directory;

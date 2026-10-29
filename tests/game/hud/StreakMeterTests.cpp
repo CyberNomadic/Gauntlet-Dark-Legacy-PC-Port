@@ -74,28 +74,28 @@ TEST_CASE("streak grades follow the narrator's thresholds and the bar climbs the
           "[game][hud][streak]") {
     CHECK(StreakMeter::gradeOf(0) == -1);
     CHECK(StreakMeter::gradeOf(1) == 0);
-    CHECK(StreakMeter::gradeOf(24) == 0);
-    CHECK(StreakMeter::gradeOf(25) == 1);
-    CHECK(StreakMeter::gradeOf(50) == 2);
-    CHECK(StreakMeter::gradeOf(75) == 3);
-    CHECK(StreakMeter::gradeOf(100) == 4);
-    CHECK(StreakMeter::gradeOf(200) == 4);
+    CHECK(StreakMeter::gradeOf(62) == 0);
+    CHECK(StreakMeter::gradeOf(63) == 1);
+    CHECK(StreakMeter::gradeOf(125) == 2);
+    CHECK(StreakMeter::gradeOf(188) == 3);
+    CHECK(StreakMeter::gradeOf(250) == 4);
+    CHECK(StreakMeter::gradeOf(500) == 4);
     CHECK(StreakMeter::kLetters[4] == 'S');
     CHECK(StreakMeter::kGradeCounts == StreakGrades::kCounts);
     CHECK(StreakMeter::bandProgress(0) == 0.0f);
-    CHECK(StreakMeter::bandProgress(13) == Approx(0.5f));
-    CHECK(StreakMeter::bandProgress(100) == 1.0f);
-    CHECK(StreakMeter::bandProgress(150) == 1.0f);
+    CHECK(StreakMeter::bandProgress(32) == Approx(0.5f)); // halfway from 1 to 63
+    CHECK(StreakMeter::bandProgress(250) == 1.0f);
+    CHECK(StreakMeter::bandProgress(500) == 1.0f);
     // The climb through the grade sets the reach; the grade's quiet drains it to nothing,
     // three seconds at D and one and a half at S.
-    const f32 full = StreakMeter::fillOf(13, 0.0f);
+    const f32 full = StreakMeter::fillOf(32, 0.0f);
     CHECK(full == Approx(0.12f + 0.88f * 0.5f));
-    CHECK(StreakMeter::fillOf(13, 1.5f) == Approx(full * 0.5f));
-    CHECK(StreakMeter::fillOf(13, 3.0f) == 0.0f);
+    CHECK(StreakMeter::fillOf(32, 1.5f) == Approx(full * 0.5f));
+    CHECK(StreakMeter::fillOf(32, 3.0f) == 0.0f);
     CHECK(StreakMeter::fillOf(0, 0.0f) == 0.0f);
-    CHECK(StreakMeter::fillOf(100, 0.0f) == 1.0f);
-    CHECK(StreakMeter::fillOf(100, 0.75f) == Approx(0.5f));
-    CHECK(StreakMeter::fillOf(100, 1.5f) == 0.0f);
+    CHECK(StreakMeter::fillOf(250, 0.0f) == 1.0f);
+    CHECK(StreakMeter::fillOf(250, 0.75f) == Approx(0.5f));
+    CHECK(StreakMeter::fillOf(250, 1.5f) == 0.0f);
     CHECK(StreakMeter::shakeOf(-1) == 0.0f);
     CHECK(StreakMeter::shakeOf(4) > StreakMeter::shakeOf(1));
     CHECK(StreakMeter::letterScaleOf(4) > StreakMeter::letterScaleOf(0));
@@ -128,7 +128,7 @@ TEST_CASE("a run brings the meter in and every blow punches it while a new grade
     f.meter.animate(0.05f);
     CHECK(f.meter.look(0).punch == Approx(0.75f));
     const f32 shakeBefore = f.meter.look(0).shake;
-    f.see(0, 25, true);
+    f.see(0, 63, true);
     look = f.meter.look(0);
     CHECK(look.grade == 1);
     CHECK(look.rankFlash == StreakMeter::kRankFlash);
@@ -150,13 +150,13 @@ TEST_CASE("a run brings the meter in and every blow punches it while a new grade
 TEST_CASE("the run's end lingers the verdict then the meter fades and forgets the run",
           "[game][hud][streak]") {
     Fixture f;
-    f.see(0, 30, true, 30);
+    f.see(0, 80, true, 80);
     f.pass(0.5f);
-    f.see(0, 0, false, 30);
+    f.see(0, 0, false, 80);
     auto look = f.meter.look(0);
     CHECK(look.ended);
     CHECK(look.grade == 1);
-    CHECK(look.count == 30);
+    CHECK(look.count == 80);
     CHECK(look.punch == 1.0f);
     f.pass(StreakMeter::kLinger * 0.5f);
     look = f.meter.look(0);
@@ -171,7 +171,7 @@ TEST_CASE("the run's end lingers the verdict then the meter fades and forgets th
     CHECK_FALSE(look.ended);
     CHECK(look.grade == -1);
     CHECK(look.count == 0);
-    CHECK(look.best == 30);
+    CHECK(look.best == 80);
     CHECK_FALSE(f.meter.visible());
     // A seat no longer watched leaves without a verdict.
     f.see(1, 5, true);

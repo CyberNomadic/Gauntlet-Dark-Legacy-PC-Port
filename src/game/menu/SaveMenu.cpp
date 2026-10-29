@@ -11,7 +11,6 @@ namespace {
 constexpr usize kPageSize = 6;
 constexpr s32 kPrevious = -2;
 constexpr s32 kNext = -3;
-constexpr s32 kBack = -1;
 } // namespace
 std::string SaveMenu::text(std::string_view id) const {
     return std::string(m_strings != nullptr ? m_strings->get(id) : id);
@@ -84,7 +83,6 @@ MenuDefinition SaveMenu::definition() const {
                 menu.items.push_back({text("files.next"), kNext});
             }
         }
-        menu.items.push_back({text("menu.back"), kBack});
     }
     return menu;
 }
@@ -104,9 +102,7 @@ void SaveMenu::choose(s32 code) {
     if (m_state != State::Slots) {
         return;
     }
-    if (code == kBack) {
-        m_state = State::Done;
-    } else if (code == kPrevious && m_page > 0) {
+    if (code == kPrevious && m_page > 0) {
         --m_page;
     } else if (code == kNext && m_slots != nullptr && (m_page + 1) * kPageSize < m_slots->count()) {
         ++m_page;

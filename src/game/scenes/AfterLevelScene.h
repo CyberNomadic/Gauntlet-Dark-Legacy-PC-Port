@@ -67,8 +67,9 @@ private:
     void drawMagicLine(const ShopLane& lane, s32 x);
     void drawShop(const ShopLane& lane, s32 x);
     void drawInventory(const ShopLane& lane, s32 x);
+    /** Text in `color` with the purple glow under it when `glow`, steady while `hovered`. */
     void line(s32 x, s32 y, std::string_view value, f32 scale, Color color = Color::white(),
-              bool glow = false);
+              bool glow = false, bool hovered = false);
     void image(std::string_view name, s32 x, s32 y, Color color = Color::white());
     void drawBackground(s32 player);
     void drawFrame(std::string_view name, s32 x, s32 y);
@@ -113,6 +114,8 @@ private:
     SoundHandle m_tallySound = kNoSound;
     std::optional<u32> m_tallyCue;
     std::vector<SpeechTiming> m_effects;
+    /** The tail of the last "has gained a level": the next one is said after it. */
+    Effect m_announcement;
     std::vector<SoundHandle> m_outputEffects; ///< stopped before their borrowed banks are replaced
     std::vector<std::string> m_lastSounds;
 };

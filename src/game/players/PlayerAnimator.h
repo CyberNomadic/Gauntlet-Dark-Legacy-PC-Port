@@ -606,6 +606,9 @@ public:
     /** Visual-only fractional pose, interpolated between simulation updates. Gameplay
      * attachments and attack windows must continue to use pose() and frame(). */
     void evaluatePresentation(TreePose& out, f32 alpha = 1.0f) const;
+    /** Continue only the current sequence/transition during imported departure.
+     * No action decision is applied and no gameplay release is emitted. */
+    void advancePresentation(f32 seconds);
     const AnimationPlayer& player() const { return m_player; }
     s32 stillTicks() const { return m_stillTicks; }
     s32 fidgetTicks() const { return m_fidgetTicks; }

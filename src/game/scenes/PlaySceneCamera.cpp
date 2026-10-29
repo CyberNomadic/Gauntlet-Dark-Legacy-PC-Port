@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "engine/core/Types.h"
 
 #include "game/players/CursorAim.h"
@@ -16,12 +18,170 @@ bool PlayScene::scriptedCamera() const {
 }
 
 bool PlayScene::cameraContinuous() const {
-    return !m_viewOverride && m_previousCamera.has_value() && !scriptedCamera() &&
+    return !m_viewOverride && previousViewCamera().has_value() && !scriptedCamera() &&
            m_previousBossCamera == bossCameraOn();
 }
 
+const std::optional<WorldCamera>& PlayScene::previousViewCamera() const {
+    return soloViewActive() && !scriptedCamera() ? m_previousSeatView : m_previousCamera;
+}
+
 WorldCamera PlayScene::viewCamera() const {
-    return m_viewOverride.value_or(simulationCamera());
+    return m_viewOverride.value_or(presentedCamera());
+}
+
+/** Solo cameras hold while nothing else frames the party: not a boss fight's camera nor an
+ * imported level's own. The scripted cameras (cuts, arrivals, ceremonies) show for all. */
+bool PlayScene::soloViewActive() const {
+    return m_sim.soloCameras && m_world != nullptr && m_world->imported() == nullptr &&
+           !bossCameraOn();
+}
+
+s32 PlayScene::presentedSeat() const {
+    s32 lowest = -1;
+    for (usize i = 0; i < m_players.size(); ++i) {
+        const s32 seat = m_players[i].actor.player();
+        if (seat < 0 || seat >= kPlayerCount) {
+            continue;
+        }
+        if (seat == m_viewSeat) {
+            return seat;
+        }
+        if (!isDown(i) && (lowest < 0 || seat < lowest)) {
+            lowest = seat;
+        }
+    }
+    return lowest;
+}
+
+const TowerCamera& PlayScene::seatCamera(s32 seat) const {
+    return m_seatCameras[static_cast<usize>(std::clamp(seat, 0, kPlayerCount - 1))];
+}
+
+WorldCamera PlayScene::cameraOfSeat(s32 seat) const {
+    const TowerCamera& own = seatCamera(seat);
+    return m_sim.shake.apply(own.camera(), own.attention());
+}
+
+WorldCamera PlayScene::presentedCamera() const {
+    if (soloViewActive() && !scriptedCamera()) {
+        if (const s32 seat = presentedSeat(); seat >= 0) {
+            return cameraOfSeat(seat);
+        }
+    }
+    return simulationCamera();
+}
+
+WorldCamera PlayScene::cameraFor(const PlayerActor& actor) const {
+    const s32 seat = actor.player();
+    if (soloViewActive() && !scriptedCamera() && seat >= 0 && seat < kPlayerCount) {
+        return cameraOfSeat(seat);
+    }
+    return simulationCamera();
+}
+
+std::vector<f32> PlayScene::movementYaws(f32 shared) const {
+    std::vector<f32> yaws(m_players.size(), shared);
+    if (!soloViewActive()) {
+        return yaws;
+    }
+    for (usize i = 0; i < m_players.size(); ++i) {
+        const s32 seat = m_players[i].actor.player();
+        if (seat >= 0 && seat < kPlayerCount) {
+            yaws[i] = seatCamera(seat).yaw();
+        }
+    }
+    return yaws;
+}
+
+u8 PlayScene::arrowOwnSeats() const {
+    if (soloViewActive() && !scriptedCamera()) {
+        if (const s32 seat = presentedSeat(); seat >= 0) {
+            return static_cast<u8>(1U << static_cast<u32>(seat));
+        }
+    }
+    return m_localSeats;
+}
+
+PlayScene::SeatCameraStates PlayScene::seatCameraStates() const {
+    SeatCameraStates states;
+    for (usize i = 0; i < states.size(); ++i) {
+        states[i] = m_seatCameras[i].localState();
+    }
+    return states;
+}
+
+std::vector<CameraSubject> PlayScene::partySubjects(const Vec3& displacement) const {
+    std::vector<CameraSubject> subjects;
+    subjects.reserve(m_players.size());
+    for (const PlayerRuntime& runtime : m_players) {
+        const auto& actor = runtime.actor;
+        subjects.push_back({actor.position() + displacement, actor.followPoint() + displacement,
+                            actor.height() * 0.5f});
+    }
+    return subjects;
+}
+
+namespace {
+/** The standing members' subjects, for a fallen seat's camera to keep with the party. */
+std::vector<CameraSubject> standingOf(std::span<const CameraSubject> subjects,
+                                      std::span<const PlayerRuntime> players) {
+    std::vector<CameraSubject> standing;
+    for (usize i = 0; i < subjects.size() && i < players.size(); ++i) {
+        if (players[i].life == PlayerLife::Standing) {
+            standing.push_back(subjects[i]);
+        }
+    }
+    return standing;
+}
+} // namespace
+
+void PlayScene::resetSeatCameras(std::span<const CameraSubject> subjects,
+                                 std::span<const WorldLocator> markers, const CameraRange& range) {
+    const auto standing = standingOf(subjects, m_players);
+    for (usize i = 0; i < m_players.size() && i < subjects.size(); ++i) {
+        const s32 seat = m_players[i].actor.player();
+        if (seat < 0 || seat >= kPlayerCount) {
+            continue;
+        }
+        const std::span<const CameraSubject> own =
+            !isDown(i) ? subjects.subspan(i, 1)
+            : standing.empty() ? subjects
+                               : std::span<const CameraSubject>{standing};
+        m_seatCameras[static_cast<usize>(seat)].reset(own, markers, range, cameraView());
+    }
+}
+
+void PlayScene::followSeatCameras(std::span<const CameraSubject> subjects, f32 seconds) {
+    const auto standing = standingOf(subjects, m_players);
+    for (usize i = 0; i < m_players.size() && i < subjects.size(); ++i) {
+        const s32 seat = m_players[i].actor.player();
+        if (seat < 0 || seat >= kPlayerCount) {
+            continue;
+        }
+        const std::span<const CameraSubject> own =
+            !isDown(i) ? subjects.subspan(i, 1)
+            : standing.empty() ? subjects
+                               : std::span<const CameraSubject>{standing};
+        m_seatCameras[static_cast<usize>(seat)].update(own, m_world->cameraMarkers(),
+                                                       m_world->cameraRange(), cameraView(),
+                                                       seconds);
+    }
+}
+
+void PlayScene::snapSeatCameras(std::span<const CameraSubject> subjects) {
+    const auto standing = standingOf(subjects, m_players);
+    for (usize i = 0; i < m_players.size() && i < subjects.size(); ++i) {
+        const s32 seat = m_players[i].actor.player();
+        if (seat < 0 || seat >= kPlayerCount) {
+            continue;
+        }
+        const std::span<const CameraSubject> own =
+            !isDown(i) ? subjects.subspan(i, 1)
+            : standing.empty() ? subjects
+                               : std::span<const CameraSubject>{standing};
+        m_seatCameras[static_cast<usize>(seat)].snapAttention(own, m_world->cameraRange());
+    }
 }
 
 WorldCamera PlayScene::simulationCamera() const {
@@ -41,6 +201,15 @@ WorldCamera PlayScene::simulationCamera() const {
     }
     if (const auto& ceremony = m_towerRelics.camera(); ceremony.has_value() && relicCeremonyOn()) {
         return *ceremony;
+    }
+    if (m_world != nullptr) {
+        if (const auto* imported = m_world->imported()) {
+            if (const auto camera = imported->camera()) {
+                const f32 distance =
+                    std::max(1.0f, glm::distance(camera->position, m_camera.attention()));
+                return m_sim.shake.apply(*camera, camera->position + camera->forward() * distance);
+            }
+        }
     }
     return bossCameraOn()
                ? m_sim.shake.apply(m_sim.bossCamera.camera(), m_sim.bossCamera.attention())

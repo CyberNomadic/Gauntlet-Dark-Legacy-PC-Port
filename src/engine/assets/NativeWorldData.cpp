@@ -5,6 +5,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/WorldDataWad.h"
 
@@ -137,7 +138,7 @@ bool WorldData::loadNative(const std::filesystem::path& file) {
         resolveEnemyLimits();
         return loaded();
     } catch (const std::exception& e) {
-        log::warn("Native world data {}: {}", file.string(), e.what());
+        log::warn("Native world data {}: {}", paths::utf8(file), e.what());
         *this = WorldData{};
         return false;
     }

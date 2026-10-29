@@ -1,3 +1,4 @@
+#include "engine/platform/Paths.h"
 #include "engine/world/TextureAnimator.h"
 
 #include <algorithm>
@@ -143,7 +144,7 @@ void TextureAnimator::bind(std::span<const TextureAnimationInfo> animations, Tex
         }
         if (entry.frames.size() != static_cast<usize>(entry.period)) {
             log::warn("Texture animation {} in {}: requested {} frames at {}, resolved {}",
-                      animation.name, textures.directory().string(), entry.period, found.index,
+                      animation.name, paths::utf8(textures.directory()), entry.period, found.index,
                       entry.frames.size());
         }
         if (entry.frames.empty()) {

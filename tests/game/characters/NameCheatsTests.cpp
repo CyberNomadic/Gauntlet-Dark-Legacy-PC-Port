@@ -147,7 +147,7 @@ TEST_CASE("ordinary names and developer-only codes do not silently enable cheats
 
 TEST_CASE("hidden name codes choose their authored class colour and persistent appearance",
           "[game][cheats][players]") {
-    REQUIRE(hiddenCostumes().size() == 26);
+    REQUIRE(hiddenCostumes().size() == 27);
     for (const auto& costume : hiddenCostumes()) {
         CAPTURE(costume.name);
         CharacterSave save;
@@ -166,6 +166,11 @@ TEST_CASE("hidden name codes choose their authored class colour and persistent a
     REQUIRE(hiddenCostume("DBRNKR"));
     CHECK(hiddenCostume("DBRNKR") == hiddenCostume("AYA555"));
     CHECK(hiddenCostume("SUM224")->character == 2);
+    // Old Thor, the unused warrior of PLAYERS/WAR/HIR, answers to CYBMOS.
+    REQUIRE(hiddenCostume("CYBMOS"));
+    CHECK(hiddenCostume("CYBMOS")->character == 0);
+    CHECK(hiddenCostume("CYBMOS")->directory == "HIR");
+    CHECK(hiddenCostume("cybmos") == nullptr); // codes are case-sensitive
 }
 
 TEST_CASE("SUM224 selects the same supplied master as unlocked Sumner", "[cheats][sumner]") {

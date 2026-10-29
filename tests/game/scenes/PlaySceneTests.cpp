@@ -717,7 +717,11 @@ TEST_CASE("normal attack input emits visible weapon and amulet streaks on succes
     if (weapon != 0) {
         inventory.addPowerup(powerup::kWeapon, weapon, 30, -1);
     }
-    REQUIRE(scene.open(device, context, world, party, scenario.tower));
+    // The shots go back toward the entrance, into the clear: facing the field, the knight
+    // would answer the zombies rising there with a throw instead.
+    PlayOptions options = scenario.tower;
+    options.yaw = world.startPoint(0)->rotation.y + kPi;
+    REQUIRE(scene.open(device, context, world, party, options));
     for (s32 shot = 0; shot < 2; ++shot) {
         for (s32 tick = 0; tick < 120; ++tick) {
             REQUIRE(scene.update(1.0 / 30, {}) == PlayOutcome::Running);
@@ -1031,8 +1035,9 @@ TEST_CASE("the party enters the tower at its entrance and walks under control",
     REQUIRE(actor->position().x == Approx(start->position.x).margin(0.01f));
     REQUIRE(actor->position().z == Approx(start->position.z).margin(0.01f));
     REQUIRE(actor->position().y == Approx(start->position.y).margin(1.0f));
-    // Facing into the tower: a half turn from the marker, which points back out of the door.
-    REQUIRE(std::abs(std::remainder(actor->yaw() - (start->rotation.y + kPi), 2.0f * kPi)) < 1e-4f);
+    // Facing the way the marker does, in from the door: the original takes the locator's yaw
+    // as stored (gPlayerStartYaw), nothing added.
+    REQUIRE(std::abs(std::remainder(actor->yaw() - start->rotation.y, 2.0f * kPi)) < 1e-4f);
     REQUIRE(scene.camera().marker() >= 0);
     REQUIRE(scene.sumner().loaded());
     // The stained-glass light over the door waits for the temple's shards.
@@ -1253,9 +1258,9 @@ TEST_CASE("a scenario's options place the party and skip the welcome",
     REQUIRE(scene.pickups().cards().size() == 1);
     REQUIRE(scene.pickups().cards()[0].player == 0);
     REQUIRE(scene.pickups().cards()[0].texture == PickupHud::kCrystalCard);
-    REQUIRE(scene.pickups().count(0).showing());
-    REQUIRE(scene.pickups().count(0).count == actor->save().progress().crystals[1]);
-    REQUIRE(scene.pickups().count(0).total == 15);
+    REQUIRE(scene.pickups().counts(0)[0].showing());
+    REQUIRE(scene.pickups().counts(0)[0].count == actor->save().progress().crystals[1]);
+    REQUIRE(scene.pickups().counts(0)[0].total == 15);
     // And a fresh party can be made to skip the welcome, or an old one to get it.
     scene.close();
     options.welcome = true;
@@ -1677,8 +1682,9 @@ TEST_CASE("the whole party on one of the tower's portals travels to the level it
     arrive.arrivalWorld = LevelRef::kTowerRealm;
     arrive.arriving = true;
     REQUIRE(scene.open(device, context, world, party, arrive));
-    // The picture is up as the level opens and clears within the second.
-    REQUIRE(scene.transition().showing());
+    // The level cuts in: no picture is put up over an arriving party (the original wipes
+    // the map or the transition picture the moment the level has loaded).
+    REQUIRE_FALSE(scene.transition().showing());
     for (s32 i = 0; i < 60; ++i) {
         scene.update(1.0 / 60.0, PlayScene::Inputs{});
     }

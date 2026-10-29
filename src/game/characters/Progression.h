@@ -6,6 +6,7 @@
 
 #include "game/characters/ClassData.h"
 #include "game/characters/Inventory.h"
+#include "game/characters/LegendsProgress.h"
 #include "game/characters/LevelRecord.h"
 #include "game/characters/Relics.h"
 
@@ -61,6 +62,9 @@ struct ClassProgress {
     Relics relics;       ///< the runestones, legend items and gargoyle pieces gathered
     LevelRecord levels;  ///< the levels beaten and the boss levels died on
     LifetimeStats lifetime;
+    std::array<LegendsProgress, kLegendsPlatformCount> legends;
+    const LegendsProgress& legendsProgress(LegendsPlatform platform) const;
+    LegendsProgress& legendsProgress(LegendsPlatform platform);
     s32 appearanceLevel() const;
     bool promotionPending() const;
 };

@@ -21,6 +21,7 @@
 #include "game/enemies/Enemies.h"
 #include "game/enemies/EnemyMissiles.h"
 #include "game/enemies/Generators.h"
+#include "game/enemies/LegendsActors.h"
 #include "game/enemies/PlacedEnemies.h"
 #include "game/hud/BossMeter.h"
 #include "game/level/LevelWorld.h"
@@ -73,12 +74,17 @@ public:
     };
     void open(const Resources& resources, std::span<const PlayerRuntime> players);
     void close();
+    /** Current GDL damage state for the level-owned native generator figures.
+     * Failed installations remain pool=-1 so their artwork is not falsely destroyed. */
+    std::vector<ImportedGeneratorState> importedGeneratorStates() const;
     /** What the camera takes in and where it looks: what is on screen, and the placed
      * enemies it comes to see stand (fn_80060114). */
     /** What the swarm and the generators count as on screen; the placed enemies the view
      * comes to see stand as well, unless `standPlaced` is off (the entrance, when
      * fn_80060114 waits for the level's earlyenemies). */
     void watch(const ViewVolume& view, const Vec3& attention, bool standPlaced = true);
+    /** The same for what the party's cameras take in together, under solo cameras. */
+    void watch(const ViewSet& views, bool standPlaced = true);
     usize pendingPlacements() const { return m_placements.count(); }
     PlacedEnemies& placements() { return m_placements; }
     const PlacedEnemies& placements() const { return m_placements; }
@@ -86,6 +92,8 @@ public:
     f32 difficultyGain() const { return m_resources ? m_resources->difficultyGain : 1.0f; }
     /** The additive mechanics' answers, borrowed; the standard ones when null. */
     void setMechanics(const MechanicsFacade* mechanics) { m_mechanics = mechanics; }
+    /** The party size the generators breed for instead of the players present, or none. */
+    void setPartyCount(std::optional<s32> count) { m_partyCountOverride = count; }
     /** The swarm's answer to the party's run of close blows, as of the last update. */
     const SwarmAggression& aggression() const { return m_sim.aggression; }
     /** Draws the show on the elemental ones, `seconds` of presentation on from the last
@@ -140,7 +148,8 @@ public:
     /** Lends the swarm another level's roster entries, for the voices of kinds the developer
      * console brings in from it; kinds the level has keep its own. */
     void borrowRoster(std::span<const LevelEnemy> entries);
-    /** The level's record with the borrowed roster entries added, else the level's own. */
+    /** Feedback-only view of the roster; imported worlds have no GDL level record,
+     * so their borrowed voices use an otherwise empty non-boss view. */
     const LevelInfo* levelNow() const;
     Vec3 resolveMovement(const PlayerActor& player, const Vec3& from, const Vec3& to) const;
     /** Routes a contact by player identity; breath uses a shared quarter-second gate. */
@@ -174,6 +183,7 @@ public:
     const Enemies& enemies() const { return m_enemies; }
     Generators& generators() { return m_generators; }
     const Generators& generators() const { return m_generators; }
+    const LegendsActors& importedActors() const { return m_importedActors; }
     Critters& critters() { return m_critters; }
     const Critters& critters() const { return m_critters; }
     /** The golems, gargoyles and Deaths still standing as item statues. */
@@ -258,7 +268,7 @@ private:
     void clearDeaths();
     void finishSummons(std::span<const EnemyView> players);
     using Placement = PlacedEnemies::Placement;
-    void standPlacements(std::optional<ViewVolume> view, const Vec3& attention);
+    void standPlacements(const std::optional<ViewSet>& views);
     void stand(const Placement& placement);
     /** Whether the camera sees a sphere from close enough for a placement to stand. */
     bool inView(const Vec3& at, f32 radius) const;
@@ -293,11 +303,25 @@ private:
                      const Events& events);
     std::optional<Resources> m_resources;
     void refreshBorrowedRoster();
+    void bindImportedSounds();
+    void openImportedBoss(const EnemyScales& scales);
+    void openImportedActors();
+    void updateImportedActors(f32 seconds, std::span<const EnemyView> views, bool timeStopped);
     std::optional<LevelInfo> m_levelNow; ///< the level's record with the borrowed roster
     Enemies m_enemies;
     const MechanicsFacade* m_mechanics = nullptr; ///< never simulation state
+    std::optional<s32> m_partyCountOverride;      ///< the scene's, applied each count
     ElementAuraShow m_auras; ///< the show on the elemental ones; never simulation state
     Generators m_generators;
+    std::vector<std::pair<u32, s32>> m_importedGenerators;
+    struct ImportedGeneratorSound {
+        s32 kind = -1;
+        s32 realm = -1;
+        std::string level;
+    };
+    std::vector<ImportedGeneratorSound> m_importedGeneratorSounds;
+    std::unique_ptr<TextureSet> m_importedBossTextures;
+    LegendsActors m_importedActors;
     Critters m_critters;
     static constexpr usize kPlayerIds = 4;   ///< players are numbered 0 to 3
     static constexpr s32 kStreakLesson = 10; ///< this many hits teach to destroy generators

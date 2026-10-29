@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "engine/core/Types.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl::game {
 
@@ -40,7 +41,7 @@ CommandLineResult parseCommandLine(std::span<const std::string_view> args, Appli
             if (!hasValue) {
                 return fail(std::move(desc), "--assets requires a directory");
             }
-            desc.assetDirectory = args[++i];
+            desc.assetDirectory = paths::fromUtf8(args[++i]);
             result.options.unpackedDirectory = desc.assetDirectory;
         } else if (arg == "--movie") {
             if (!hasValue) {
@@ -54,7 +55,7 @@ CommandLineResult parseCommandLine(std::span<const std::string_view> args, Appli
             if (!hasValue) {
                 return fail(std::move(desc), "--data requires a directory");
             }
-            result.options.dataDirectory = args[++i];
+            result.options.dataDirectory = paths::fromUtf8(args[++i]);
         } else if (arg == "--title") {
             result.options.startAtTitle = true;
         } else if (arg == "--demo") {
@@ -65,7 +66,7 @@ CommandLineResult parseCommandLine(std::span<const std::string_view> args, Appli
             if (!hasValue) {
                 return fail(std::move(desc), "--scenario requires a file");
             }
-            result.options.scenario = args[++i];
+            result.options.scenario = paths::fromUtf8(args[++i]);
         } else if (arg == "--no-vsync") {
             desc.vsync = false;
         } else if (arg == "--netplay-auto-start") {
@@ -81,7 +82,7 @@ CommandLineResult parseCommandLine(std::span<const std::string_view> args, Appli
             } else if (arg == "--netplay-room") {
                 result.options.netplayRoom = value;
             } else if (arg == "--netplay-invite") {
-                result.options.netplayInvite = value;
+                result.options.netplayInvite = paths::fromUtf8(value);
             } else {
                 result.options.netplayContent = value;
             }
@@ -150,7 +151,7 @@ const char* usageText() {
            "  --netplay-content <sha256> asset identity supplied by the test launcher\n"
            "  --netplay-auto-start start the paired-window test once both machines are ready\n"
            "  --no-vsync         present as fast as possible\n"
-           "  --validation       force the Vulkan validation layer on\n"
+           "  --validation       force the Vulkan validation layer, or OpenGL error reporting, on\n"
            "  --no-validation    force it off (default on in Debug builds)\n"
            "  --frames <n>       quit after n frames (smoke testing)\n"
            "  --version          print the build version and exit\n"

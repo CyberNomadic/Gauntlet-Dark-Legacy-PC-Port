@@ -13,7 +13,9 @@ namespace {
 // GUNE5D Hidden (80120618), dispatched by set_hidden_player (8007B558).
 // NAK069 is deliberately disabled in the ordinary retail table. Debug-menu
 // activation chords are not name-entry cheats and are not reproduced here.
-constexpr std::array<HiddenCostume, 26> kCostumes{{
+// CYBMOS is the remake's own row: the unused Old Thor warrior shipped in PLAYERS/WAR/HIR
+// (a complete costume with its WEAP_HOLD), reached by the name the community fixed on.
+constexpr std::array<HiddenCostume, 27> kCostumes{{
     {"ICE600", 4, 2, "GEI"}, {"NUD069", 4, 1, "SNM"}, {"STX222", 7, 1, "STK"},
     {"KJH105", 7, 3, "KJH"}, {"PNK666", 7, 0, "PNK"}, {"BAT900", 5, 3, "GEB"},
     {"TAK118", 5, 2, "NIN"}, {"STG333", 5, 3, "STG"}, {"KAO292", 5, 2, "WTR"},
@@ -22,7 +24,7 @@ constexpr std::array<HiddenCostume, 26> kCostumes{{
     {"AYA555", 1, 1, "SCH"}, {"CEL721", 1, 3, "CEL"}, {"CAS400", 0, 1, "GEC"},
     {"MTN200", 0, 2, "GEM"}, {"RAT333", 0, 2, "RAT"}, {"GARM99", 2, 0, "GA2"},
     {"GARM00", 2, 3, "GAM"}, {"DES700", 2, 0, "GED"}, {"SKY100", 2, 3, "GEP"},
-    {"SUM224", 2, 0, "SUM"}, {"DARTHC", 5, 3, "DCY"},
+    {"SUM224", 2, 0, "SUM"}, {"DARTHC", 5, 3, "DCY"}, {"CYBMOS", 0, 1, "HIR"},
 }};
 
 struct PowerupCode {

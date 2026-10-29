@@ -30,6 +30,123 @@ namespace {
 using namespace gdl;
 using namespace gdl::game;
 
+class PickupImportedLevel final : public ImportedLevel {
+public:
+    void capturePresentation() override {}
+    void update(f32, bool) override {}
+    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
+    }
+};
+
+TEST_CASE("completed imported pickups use common feedback without granting rewards twice",
+          "[pickups][legends][imported-level]") {
+    LevelWorld world;
+    LevelFixtures fixtures;
+    PartyHud hud;
+    const ClassDataSet classes;
+    const auto root = test::scratchDirectory("imported-pickup-feedback");
+    test::FakeRenderDevice device;
+    WorldCollision collision;
+    CollisionTriangle floor;
+    floor.normal = {0, 1, 0};
+    floor.vertices = {{{-20, 0, -20}, {0, 0, 20}, {20, 0, -20}}};
+    floor.objectFlags = 4;
+    collision.build({floor});
+    REQUIRE(collision.loaded());
+    REQUIRE(world.loadImported(device, root, LevelRef{},
+                               WorldLayout::fromDecoded({}, {}, {-20, 0, -20}, {20, 20, 20}),
+                               std::move(collision), std::make_shared<PickupImportedLevel>()));
+    REQUIRE(world.imported());
+    REQUIRE_FALSE(world.isTower());
+    const std::array<test::NativeSoundSample, 1> samples{{{48000, std::vector<s16>(4800, 1000)}}};
+    test::writeNativeSoundBank(root / "audio/COMMON", R"({"sounds":[
+        {"index":0,"name":"S_PICKUPKEY","duration":0.1,"sequence":[{"sample":0}]},
+        {"index":1,"name":"S_PICKUPSPECIAL","duration":0.1,"sequence":[{"sample":0}]},
+        {"index":2,"name":"S_PICKUPRUNE","duration":0.1,"sequence":[{"sample":0}]}]})",
+                               samples);
+    AudioMixer mixer(48000);
+    SoundPlayer output(mixer);
+    LevelSoundscape audio;
+    audio.open(root, &output, nullptr);
+    std::array<PlayerRuntime, 2> players;
+    players[0].actor.spawn(3, {}, nullptr, {0, 0, 0}, 0);
+    players[1].actor.spawn(1, {}, nullptr, {10, 0, 0}, 0);
+    std::vector<std::pair<s32, usize>> lessons;
+    const PartyPickups::Services services{.world = world,
+                                          .fixtures = fixtures,
+                                          .hud = hud,
+                                          .audio = audio,
+                                          .classes = classes,
+                                          .help = [&](s32 id, usize recipient) {
+                                              lessons.emplace_back(id, recipient);
+                                              return true;
+                                          }};
+    PartyPickups pickups;
+    ItemOffer offer{static_cast<s32>(ItemKind::Keys), 1};
+    ItemTaking taking;
+    bool cardExpected = true;
+    bool soundExpected = true;
+    bool gag = false;
+    bool campaign = false;
+    SECTION("ordinary inventory and HUD use the player's input slot") {}
+    SECTION("partially collected keys do not grant the remainder again") {
+        players[0].actor.save().progress().inventory.keys = 8;
+        offer.amount = 4;
+    }
+    SECTION("powerups focus the selector without activating or adding charges again") {
+        offer = {static_cast<s32>(ItemKind::SpeedPowerup), 20, 0, 15};
+    }
+    SECTION("bad food gags without applying damage twice") {
+        players[0].actor.save().progress().health = 200;
+        offer = {static_cast<s32>(ItemKind::Food), -50};
+        soundExpected = false; // This synthetic participant has no voice archive.
+        gag = true;
+    }
+    SECTION("native campaign awards never award or share GDL runestones") {
+        offer = {};
+        auto& progress = players[0].actor.save().progress();
+        REQUIRE(progress.legendsProgress(LegendsPlatform::N64).add(LegendsRelic::Runestone, 3));
+        taking = {.outcome = ItemTaking::Outcome::Taken, .count = 1, .sound = "S_PICKUPRUNE"};
+        cardExpected = false;
+        campaign = true;
+    }
+    if (!campaign) {
+        taking = takeItem(players[0].actor.save(), offer, 1, false);
+        REQUIRE(taking.took());
+    }
+    const auto first = players[0].actor.save();
+    const auto second = players[1].actor.save();
+    pickups.presentTaken(offer, taking, "NATIVE_ITEM", 0, players, services);
+    CHECK(players[0].actor.save() == first);
+    CHECK(players[1].actor.save() == second);
+    CHECK(players[0].gesture == (campaign ? PlayerDeed::None
+                                 : gag    ? PlayerDeed::Gag
+                                          : PlayerDeed::Pick));
+    CHECK(players[1].gesture == PlayerDeed::None);
+    CHECK(hud.pickups().cards().size() == (cardExpected ? 1 : 0));
+    if (cardExpected) {
+        CHECK(hud.pickups().cards()[0].player == 3);
+        CHECK(hud.pickups().cards()[0].texture == taking.card);
+    }
+    if (offer.kind == static_cast<s32>(ItemKind::SpeedPowerup)) {
+        CHECK(hud.selector(3).selection() == 0);
+        CHECK(hud.selector(1).selection() == -1);
+        CHECK_FALSE(first.progress().inventory.powerups[0].on);
+    }
+    std::array<f32, 256> mixed{};
+    mixer.mix(mixed);
+    CHECK(std::ranges::any_of(mixed, [](f32 value) { return value != 0; }) == soundExpected);
+    const auto cards = hud.pickups().cards().size();
+    const auto lessonCount = lessons.size();
+    pickups.presentTaken(offer, {}, "NATIVE_ITEM", 0, players, services);
+    pickups.presentTaken(offer, taking, "NATIVE_ITEM", players.size(), players, services);
+    players[0].departed = true;
+    pickups.presentTaken(offer, taking, "NATIVE_ITEM", 0, players, services);
+    CHECK(hud.pickups().cards().size() == cards);
+    CHECK(lessons.size() == lessonCount);
+    audio.close();
+}
+
 TEST_CASE("pickup contact is centered on the native body anchor rather than the feet",
           "[pickups][pickup-center]") {
     const LevelWorld world;
@@ -172,6 +289,16 @@ TEST_CASE("pickup reach includes the attempted step before a wall clips the play
     // This is one attempted native step, not an enlarged permanent pickup radius.
     actor.update({}, 0, 1.0f / 30, &collision);
     CHECK_FALSE(crystal.touchedBy(PartyPickups::collectors(players, world, chests)[0]));
+}
+
+TEST_CASE("a Turbo pickup is stored, not spent, while the meter is all but full",
+          "[pickups][turbo-activation]") {
+    // Auto-Use would fill a meter that is already full: the pickup waits for the selector.
+    CHECK_FALSE(PartyPickups::storesTurbo(0.0f));
+    CHECK_FALSE(PartyPickups::storesTurbo(TurboMeter::kFull * PartyPickups::kTurboStoreShare -
+                                          1.0f));
+    CHECK(PartyPickups::storesTurbo(TurboMeter::kFull * PartyPickups::kTurboStoreShare));
+    CHECK(PartyPickups::storesTurbo(TurboMeter::kFull));
 }
 
 TEST_CASE("with Auto-Use off a native Turbo Boost waits for its owner's selector activation",
@@ -921,15 +1048,15 @@ TEST_CASE("golden idol pieces reward every living participant once and show pers
         CHECK(players[2].actor.save().progress().relics.gargoylePieces[piece] == 6);
         CHECK(players[3].actor.save().progress().relics.gargoylePieces[piece] == 7);
         for (usize i = 0; i < 2; ++i) {
-            const auto& count = hud.pickups().count(slots[i]);
+            const auto& count = hud.pickups().counts(slots[i])[0];
             CHECK(count.showing());
             CHECK(count.icon == kIcons[piece]);
             CHECK(count.count == (i == 0 ? total : 5 + collected));
             CHECK(count.total == total);
             CHECK(count.secondsLeft == PickupHud::kCountSeconds);
         }
-        CHECK_FALSE(hud.pickups().count(slots[2]).showing());
-        CHECK_FALSE(hud.pickups().count(slots[3]).showing());
+        CHECK_FALSE(hud.pickups().counts(slots[2])[0].showing());
+        CHECK_FALSE(hud.pickups().counts(slots[3])[0].showing());
     }
     REQUIRE(hud.pickups().cards().size() == 2);
     for (const auto& card : hud.pickups().cards()) {

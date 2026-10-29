@@ -1,15 +1,15 @@
 #include "scene_depth.glsl"
 
-layout(set = 0, binding = 0) uniform sampler2D scene;
-layout(location = 0) in vec2 uv;
+SAMPLER_2D(0, scene)
+VARYING(0) in vec2 uv;
 layout(location = 0) out vec4 color;
-layout(push_constant) uniform Bloom {
+PUSH_CONSTANTS_BEGIN(Bloom)
     mat4 sources; // each column: framebuffer UV center and elliptical radius
     vec4 glow; // soft threshold start/end, strength, sample spacing in pixels
     vec4 pixel; // reciprocal framebuffer size, MSAA samples
     vec4 depths;
     vec4 times;
-} settings;
+PUSH_CONSTANTS_END(Bloom, settings)
 
 void main() {
     vec2 displacement = vec2(0);

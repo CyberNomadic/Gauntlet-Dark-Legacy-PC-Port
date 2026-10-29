@@ -29,7 +29,6 @@ HintMenuLabels labels() {
     HintMenuLabels out;
     out.title = "HELP";
     out.topics = {{"GENERAL", 39}, {"GUARDIANS", 40}};
-    out.back = "BACK";
     out.select = "SELECT";
     out.player = "PLAYER";
     return out;

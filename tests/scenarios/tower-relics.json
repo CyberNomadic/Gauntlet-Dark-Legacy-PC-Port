@@ -3,6 +3,6 @@
   "arrivalWorld": 7,
   "party": [
     { "class": "WAR", "color": "YEL", "level": 20,
-      "runes": [1, 2], "shards": [2], "newRunes": [0], "newShards": [1] }
+      "runes": [1, 2], "shards": [2], "newRunes": [3]}
   ]
 }

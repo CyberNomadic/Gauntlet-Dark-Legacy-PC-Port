@@ -1,5 +1,6 @@
 {
   "display": {
+    "renderer": "vulkan",
     "virtualWidth": 512,
     "virtualHeight": 384,
     "frameWidth": 640,
@@ -41,9 +42,10 @@
   "game": {
     "expandedShop": false,
     "autoSave": false,
-    "aggressorMode": true,
+    "aggressorMode": false,
     "difficulty": "normal",
     "multiplayer": "normal",
+    "soloCamera": false,
     "combat": { "autoMelee": false, "enemyHealthBars": true, "autoActivateItems": true }
   },
   "controls": {

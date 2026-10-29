@@ -48,14 +48,14 @@ enum class RunEffect : u8 {
 class MechanicsFacade {
 public:
     struct Settings {
-        bool aggressorMode = true;
+        bool aggressorMode = false;
         bool operator==(const Settings&) const = default;
     };
 
     MechanicsFacade() = default;
     explicit MechanicsFacade(const Settings& settings) : m_settings(settings) {}
 
-    /** The answers of the standard settings, for a hook handed no facade. */
+    /** The answers of the standard settings (the mode off), for a hook handed no facade. */
     static const MechanicsFacade& standard();
 
     void configure(const Settings& settings) { m_settings = settings; }

@@ -10,6 +10,7 @@
 #include "engine/assets/SoundSet.h"
 #include "engine/core/Strings.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 #include "engine/world/TreePose.h"
 
 #include "formats/AnimationTree.h"
@@ -132,7 +133,7 @@ void auditSound(NativeDataAuditResult& result) {
 
 void auditWad(NativeDataAuditResult& result) {
     const auto bytes = readFile(result.file);
-    for (const auto& section : formats::readWadDirectory(bytes, result.file.string())) {
+    for (const auto& section : formats::readWadDirectory(bytes, paths::utf8(result.file))) {
         result.counts["section_" + section.tag] += section.count;
     }
     if (result.kind == "player_wad") {
@@ -171,9 +172,9 @@ void auditWad(NativeDataAuditResult& result) {
 } // namespace
 
 std::string nativeDataKind(const std::filesystem::path& file) {
-    const auto name = toLowerAscii(file.filename().string());
-    const auto extension = toLowerAscii(file.extension().string());
-    const auto parent = toLowerAscii(file.parent_path().filename().string());
+    const auto name = toLowerAscii(paths::utf8(file.filename()));
+    const auto extension = toLowerAscii(paths::utf8(file.extension()));
+    const auto parent = toLowerAscii(paths::utf8(file.parent_path().filename()));
     if (name == "anim.ps2") {
         return "animation";
     }

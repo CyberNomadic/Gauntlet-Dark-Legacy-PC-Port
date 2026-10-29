@@ -418,7 +418,8 @@ std::optional<f32> Obstacle::contact(const Vec3& from, const Vec3& to, f32 radiu
 }
 
 bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_view name,
-                       const ItemInstance& instance, const WorldCollision* collision) {
+                       const ItemInstance& instance, const WorldCollision* collision,
+                       std::span<TextureSet* const> lenders) {
     m_sim.position = instance.position;
     if (collision != nullptr) {
         if (const auto floor = collision->restingFloorAt(instance.position, kFloorReachAbove,
@@ -456,7 +457,8 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
     m_sim.tree = &items.trees.tree(*tree);
     const auto cached = std::ranges::find_if(*m_bindings, [&](const CachedBinding& binding) {
         return binding.archive == &items && binding.device == &device &&
-               binding.tree == m_sim.tree && !binding.staticModel;
+               binding.tree == m_sim.tree && !binding.staticModel &&
+               std::ranges::equal(binding.lenders, lenders);
     });
     if (cached != m_bindings->end()) {
         m_sim.resources = cached->resources;
@@ -468,33 +470,42 @@ bool ItemFigure::place(RenderDevice& device, ItemArchive& items, std::string_vie
     }
     m_sim.resources = std::make_shared<Resources>();
     const bool mesh =
-        m_sim.resources->model.bind(*m_sim.tree, items.models, items.textures, device);
+        m_sim.resources->model.bind(*m_sim.tree, items.models, items.textures, device, lenders);
     const bool wantsMesh = std::ranges::any_of(m_sim.tree->nodes, [](const TreeNodeInfo& node) {
         return !node.object.empty() || std::ranges::any_of(node.objectFrames, [](const auto& run) {
             return !run.object.empty();
         });
     });
     m_sim.pose.rest(*m_sim.tree);
-    m_sim.particles.bind(*m_sim.tree, items, device, m_sim.transform, m_sim.pose.matrices());
+    m_sim.particles.bind(*m_sim.tree, items, device, m_sim.transform, m_sim.pose.matrices(),
+                         lenders);
     if (!mesh && (wantsMesh || m_sim.particles.field().size() == 0)) {
         m_sim.tree = nullptr;
         return false;
     }
-    textures().bind(items.trees.textureAnimations(), items.textures, device);
-    m_bindings->push_back({&items, &device, std::string{name}, false, 0, m_sim.tree,
-                           m_sim.resources, m_sim.particles});
+    textures().bind(items.trees.textureAnimations(), items.textures, device, lenders);
+    m_bindings->push_back({&items,
+                           &device,
+                           std::string{name},
+                           false,
+                           0,
+                           m_sim.tree,
+                           m_sim.resources,
+                           m_sim.particles,
+                           {lenders.begin(), lenders.end()}});
     play(0, true);
     return true;
 }
 
 bool ItemFigure::place(RenderDevice& device, const AssetScope& scope, std::string_view name,
-                       const ItemInstance& instance, const WorldCollision* collision) {
+                       const ItemInstance& instance, const WorldCollision* collision,
+                       std::span<TextureSet* const> lenders) {
     if (ItemArchive* archive = scope.archiveForTree(name)) {
-        return place(device, *archive, name, instance, collision);
+        return place(device, *archive, name, instance, collision, lenders);
     }
     // An empty scope: the item still takes its place, with nothing to show.
     static ItemArchive none;
-    const bool placed = place(device, none, name, instance, collision);
+    const bool placed = place(device, none, name, instance, collision, lenders);
     // This placeholder is not an authored archive in the level's resource
     // catalog. Empty figures retain their placement, not a synthetic binding.
     m_sim.archive = nullptr;
@@ -503,8 +514,9 @@ bool ItemFigure::place(RenderDevice& device, const AssetScope& scope, std::strin
 
 bool ItemFigure::placeStaticFallback(RenderDevice& device, const AssetScope& scope,
                                      std::string_view name, const ItemInstance& instance,
-                                     const WorldCollision* collision, u32 objectFlags) {
-    if (place(device, scope, name, instance, collision)) {
+                                     const WorldCollision* collision, u32 objectFlags,
+                                     std::span<TextureSet* const> lenders) {
+    if (place(device, scope, name, instance, collision, lenders)) {
         return true;
     }
     // A present but invalid tree is not a request to silently substitute another mesh.
@@ -519,7 +531,8 @@ bool ItemFigure::placeStaticFallback(RenderDevice& device, const AssetScope& sco
     m_sim.archive = &items;
     const auto cached = std::ranges::find_if(*m_bindings, [&](const CachedBinding& binding) {
         return binding.archive == &items && binding.device == &device && binding.name == name &&
-               binding.staticModel && binding.flags == objectFlags;
+               binding.staticModel && binding.flags == objectFlags &&
+               std::ranges::equal(binding.lenders, lenders);
     });
     if (cached != m_bindings->end()) {
         m_sim.resources = cached->resources;
@@ -537,17 +550,24 @@ bool ItemFigure::placeStaticFallback(RenderDevice& device, const AssetScope& sco
     node.objectFlags = objectFlags;
     m_sim.resources->staticTree->nodes.push_back(std::move(node));
     if (!m_sim.resources->model.bind(*m_sim.resources->staticTree, items.models, items.textures,
-                                     device)) {
+                                     device, lenders)) {
         m_sim.resources->staticTree.reset();
         return false;
     }
     m_sim.tree = m_sim.resources->staticTree.get();
     m_sim.pose.rest(*m_sim.tree);
-    textures().bind(items.trees.textureAnimations(), items.textures, device);
+    textures().bind(items.trees.textureAnimations(), items.textures, device, lenders);
     m_sim.holdPose = false;
     m_sim.index = 0;
-    m_bindings->push_back(
-        {&items, &device, std::string{name}, true, objectFlags, m_sim.tree, m_sim.resources, {}});
+    m_bindings->push_back({&items,
+                           &device,
+                           std::string{name},
+                           true,
+                           objectFlags,
+                           m_sim.tree,
+                           m_sim.resources,
+                           {},
+                           {lenders.begin(), lenders.end()}});
     return true;
 }
 
@@ -710,7 +730,7 @@ s32 ItemFigure::ticksOf(s32 index) const {
 
 void ItemFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
                       f32 alpha, f32 scale, const CameraFrame* camera, TreeModel::Pass pass,
-                      f32 presentationAlpha) const {
+                      f32 presentationAlpha, const Appearance* appearance) const {
     if (m_sim.tree != nullptr) {
         Mat4 placement = m_sim.transform;
         const TreePose* pose = &m_sim.pose;
@@ -734,6 +754,16 @@ void ItemFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLightin
         }
         textures().apply(m_sim.resources->model, *m_sim.tree, m_sim.textureSequence, visualFrame,
                          textures().presentationOffset(presentationAlpha));
+        auto& model = m_sim.resources->model;
+        // ItemFigure copies share their immutable render bindings. Reapply defaults
+        // as well as overrides so a locked/tinted copy cannot affect its siblings.
+        model.setAppearance(appearance != nullptr && appearance->unlit,
+                            appearance != nullptr ? appearance->tint : Color::white());
+        if (appearance != nullptr) {
+            for (const usize node : appearance->hiddenMeshes) {
+                model.setMeshAlpha(node, 0);
+            }
+        }
         if (!m_sim.holdPose) {
             m_sim.resources->model.setPresentationFrame(m_sim.player.sequence(), visualFrame);
         } else {
@@ -744,7 +774,7 @@ void ItemFigure::draw(RenderDevice& device, const Mat4& clip, const WorldLightin
                                     pose->matrices(), camera, alpha, pass);
         // Particles composite with the blended parts: once, after the solids, so a figure
         // drawn in both pickup passes does not double them.
-        if (pass != TreeModel::Pass::DepthWriting && pass != TreeModel::Pass::Opaque) {
+        if (TreeModel::compositesEffects(pass)) {
             const CameraFrame frame = camera != nullptr ? *camera : CameraFrame{};
             textures().applyPresentation(m_sim.particles, *m_sim.tree, m_sim.textureSequence,
                                          visualFrame,

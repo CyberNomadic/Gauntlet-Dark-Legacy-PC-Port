@@ -14,10 +14,10 @@
 #include "engine/math/PortableMath.h"
 
 #include "game/characters/Progression.h"
-#include "game/effects/ElementAuraShow.h"
 #include "game/combat/DamageTypes.h"
 #include "game/effects/CritterCueEmission.h"
 #include "game/effects/DynamicLights.h"
+#include "game/effects/ElementAuraShow.h"
 #include "game/effects/EnemyFeedbackEmission.h"
 #include "game/effects/EnemyMissileEmission.h"
 #include "game/enemies/OpponentPlacements.h"
@@ -595,6 +595,9 @@ bool LevelOpponents::equalLocal(const LocalSnapshot& a, const LocalSnapshot& b) 
 }
 
 void LevelOpponents::close() {
+    m_importedActors.clear();
+    m_importedGenerators.clear();
+    m_importedGeneratorSounds.clear();
     ++m_localEpoch;
     if (m_bindingGeneration != 0) {
         ++m_bindingGeneration; // zero permanently refuses preparations after exhaustion
@@ -638,6 +641,7 @@ void LevelOpponents::close() {
     m_critters.close();
     m_bossMeter.clear();
     m_bosses.close();
+    m_importedBossTextures.reset();
     m_enemies.close();
     m_resources.reset();
 }
@@ -654,9 +658,11 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
     RenderDevice& device = resources.device;
     LevelWorld& world = resources.world;
     const LevelInfo* level = world.level();
+    const auto* importedBoss = world.imported() ? world.imported()->importedBoss() : nullptr;
     const f32 gain = resources.difficultyGain;
     EnemyScales scales;
     scales.players = static_cast<s32>(std::max<usize>(players.size(), 1));
+    scales.bossEncounter = importedBoss != nullptr;
     GeneratorScales breeding;
     s32 most = Enemies::kMost;
     if (level != nullptr) {
@@ -688,8 +694,12 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
     const std::string_view gargoyleForm =
         gargoyle != roster.end() ? std::string_view(gargoyle->form) : std::string_view{};
     const std::array creatureTextures{&world.textures()};
-    m_critters.open(device, resources.root, &world.collision(), scales,
-                    levelName.empty() ? 'G' : levelName.front(), creatureTextures, gargoyleForm);
+    char creatureRealm = levelName.empty() ? 'G' : levelName.front();
+    if (const auto* imported = world.imported(); imported && !imported->importedActors().empty()) {
+        creatureRealm = imported->importedActors().front().costumeRealm;
+    }
+    m_critters.open(device, resources.root, &world.collision(), scales, creatureRealm,
+                    creatureTextures, gargoyleForm);
     m_critters.setHazards(&world.hazards());
     m_critters.setLookouts(LookoutRoute::of(world.layout().locators()));
     m_bosses.open(device, resources.root, &world.collision(), scales,
@@ -712,6 +722,21 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
     m_generators.bind(device, world.layout(), m_enemies, &world.collision(), breeding, playerCount,
                       roster, static_cast<s32>(world.ref().realmId), &world.items(),
                       generatorTextures);
+    if (const auto* imported = world.imported()) {
+        for (const auto& generator : imported->importedGenerators()) {
+            const auto id = m_generators.spawnImported(device, m_enemies, generator);
+            m_importedGenerators.emplace_back(generator.nativeIndex, id.value_or(-1));
+            if (!id) {
+                log::warn("Imported generator {}: failed to stand kind {}", generator.nativeIndex,
+                          generator.kind);
+            }
+        }
+        openImportedActors();
+        bindImportedSounds();
+    }
+    if (importedBoss) {
+        openImportedBoss(scales);
+    }
     // The level's boss, at its boss mark.
     if (level != nullptr && !bossNameOf(level->bossType).empty()) {
         if (const WorldLocator* mark = world.layout().findLocator(LocatorKind::Boss);
@@ -744,28 +769,48 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
                                                }),
                       &world.collision());
     if (!resources.standOnSight) {
-        standPlacements(std::nullopt, Vec3{0.0f});
+        standPlacements(std::nullopt);
     }
 }
 
+std::vector<ImportedGeneratorState> LevelOpponents::importedGeneratorStates() const {
+    std::vector<ImportedGeneratorState> result;
+    result.reserve(m_importedGenerators.size());
+    for (const auto& [nativeIndex, id] : m_importedGenerators) {
+        ImportedGeneratorState state;
+        state.nativeIndex = nativeIndex;
+        state.pool = id;
+        if (id >= 0 && static_cast<usize>(id) < m_generators.count()) {
+            state.state = m_generators.stateOf(id);
+            state.position = m_generators.positionOf(id);
+            state.standing = m_generators.standing(id);
+        }
+        result.push_back(state);
+    }
+    return result;
+}
+
 void LevelOpponents::watch(const ViewVolume& view, const Vec3& attention, bool standPlaced) {
-    m_enemies.setView(view);
+    watch(ViewSet::of(view, attention), standPlaced);
+}
+
+void LevelOpponents::watch(const ViewSet& views, bool standPlaced) {
+    m_enemies.setViews(views);
     // main.c selects the distance-limited normal camera unless a boss is present.
     const LevelInfo* level = m_resources ? m_resources->world.level() : nullptr;
-    m_generators.setView(view, level != nullptr && level->bossType >= 0
-                                   ? std::nullopt
-                                   : std::optional<Vec3>{attention});
+    m_generators.setViews(views, level == nullptr || level->bossType < 0);
     if (standPlaced) {
-        standPlacements(view, attention);
+        standPlacements(views);
     } else {
-        m_placements.observe(view, attention);
+        m_placements.observeSet(views);
     }
 }
 
 bool LevelOpponents::hasUncapturedState() const {
-    return m_critters.count() != 0 || m_bosses.present() || m_statues.count() != 0 ||
-           m_combatantProjectiles.count() != 0 || !m_sim.bags.empty() || !m_sim.clouds.empty() ||
-           !m_sim.deathShots.empty() || m_sim.shrink != EnemyShrink::kWhole;
+    return m_importedActors.count() != 0 || m_critters.count() != 0 || m_bosses.present() ||
+           m_statues.count() != 0 || m_combatantProjectiles.count() != 0 || !m_sim.bags.empty() ||
+           !m_sim.clouds.empty() || !m_sim.deathShots.empty() ||
+           m_sim.shrink != EnemyShrink::kWhole;
 }
 
 bool LevelOpponents::inView(const Vec3& at, f32 radius) const {
@@ -858,8 +903,8 @@ void LevelOpponents::updateStatues(s32 ticks, f32 seconds, std::span<PlayerRunti
 /** Each placed enemy stands once the camera sees its spot, by its size, looking from no more
  * than fifty away (fn_80060114); seen, it is gone from the waiting list whether or not the
  * swarm had room for it. With no view, all stand. */
-void LevelOpponents::standPlacements(std::optional<ViewVolume> view, const Vec3& attention) {
-    m_placements.observe(view, attention);
+void LevelOpponents::standPlacements(const std::optional<ViewSet>& views) {
+    m_placements.observeSet(views);
     m_placements.activate([this](const Placement& placement) { stand(placement); });
 }
 
@@ -888,7 +933,9 @@ void LevelOpponents::shrinkOpponents(std::span<const PlayerRuntime> players) {
     }
     const LevelInfo* level = m_resources->world.level();
     const f32 scale =
-        PlayerPowerups::enemyShrink(players, level != nullptr && level->bossType >= 0);
+        PlayerPowerups::enemyShrink(players, (level != nullptr && level->bossType >= 0) ||
+                                                 (m_resources->world.imported() &&
+                                                  m_resources->world.imported()->importedBoss()));
     if (EnemyShrink::rises(m_sim.shrink, scale)) {
         m_resources->audio.playNamed(EnemyShrink::kUnshrinkSound);
     }
@@ -970,13 +1017,93 @@ void LevelOpponents::borrowRoster(std::span<const LevelEnemy> entries) {
 
 void LevelOpponents::refreshBorrowedRoster() {
     const LevelInfo* level = m_resources ? m_resources->world.level() : nullptr;
-    if (level == nullptr || m_sim.borrowedRoster.empty()) {
+    const bool imported = m_resources && m_resources->world.imported() != nullptr;
+    if ((!level && !imported) || m_sim.borrowedRoster.empty()) {
         m_levelNow.reset();
         return;
     }
-    m_levelNow = *level;
+    // This view is consumed only by attack/impact sound resolution. Do not
+    // install a borrowed stage's boss, tuning, relics or campaign identity.
+    m_levelNow = level ? *level : LevelInfo{};
     m_levelNow->enemies.insert(m_levelNow->enemies.end(), m_sim.borrowedRoster.begin(),
                                m_sim.borrowedRoster.end());
+}
+
+void LevelOpponents::bindImportedSounds() {
+    if (!m_resources || !m_resources->world.imported()) {
+        return;
+    }
+    std::array<bool, kSwarmKindCount> needed{};
+    for (const auto& actor : m_resources->world.imported()->importedActors()) {
+        if (actor.spawn.kind >= 0 && actor.spawn.kind < kSwarmKindCount) {
+            needed[static_cast<usize>(actor.spawn.kind)] = true;
+        }
+    }
+    for (const auto& [nativeIndex, pool] : m_importedGenerators) {
+        static_cast<void>(nativeIndex);
+        if (pool >= 0) {
+            needed[static_cast<usize>(m_generators.kindOf(pool))] = true;
+        }
+    }
+    if (std::ranges::none_of(needed, [](bool value) { return value; })) {
+        return;
+    }
+    LevelCatalog catalog;
+    if (!catalog.load(m_resources->root)) {
+        log::warn("Imported opponents: no GDL sound roster is available");
+        return;
+    }
+    for (const auto& realm : catalog.realms()) {
+        // WDATA/TEST is realm zero. Its T1/T2 placeholder rosters contain
+        // scorpions, trolls and skeletons, but no S_GENDAMT/S_GENKILLT cues.
+        // Borrow the counterpart's playable campaign realm instead.
+        if (realm.id == 0) {
+            continue;
+        }
+        WorldData data;
+        if (!data.load(m_resources->root / "wdata" / (realm.file + ".json"))) {
+            continue;
+        }
+        for (const auto& source : data.levels()) {
+            const auto* audio = data.audio(source.audioIndex);
+            if (source.bossType >= 0 || source.name.empty() || !audio || audio->bank.empty()) {
+                continue;
+            }
+            for (const auto& enemy : source.enemies) {
+                if (enemy.kind < 0 || enemy.kind >= kSwarmKindCount || enemy.stream.empty() ||
+                    !needed[static_cast<usize>(enemy.kind)]) {
+                    continue;
+                }
+                // These are the real GDL voices of the admitted counterpart,
+                // as for console-spawned visitors; native stage music stays put.
+                if (!m_resources->audio.borrowBank(m_resources->root / "audio" / audio->bank)) {
+                    continue;
+                }
+                GeneratorEvent probe;
+                probe.kind = enemy.kind;
+                const auto hit = GeneratorFeedbackEmission::resolve(probe, nullptr, &source,
+                                                                    realm.id, source.name);
+                probe.destroyed = true;
+                const auto death = GeneratorFeedbackEmission::resolve(probe, nullptr, &source,
+                                                                      realm.id, source.name);
+                if (!m_resources->audio.hasNamed(hit.sound) ||
+                    !m_resources->audio.hasNamed(death.sound)) {
+                    continue;
+                }
+                borrowRoster(std::span{&enemy, usize{1}});
+                m_importedGeneratorSounds.push_back({enemy.kind, realm.id, source.name});
+                needed[static_cast<usize>(enemy.kind)] = false;
+            }
+        }
+        if (std::ranges::none_of(needed, [](bool value) { return value; })) {
+            break;
+        }
+    }
+    for (usize kind = 0; kind < needed.size(); ++kind) {
+        if (needed[kind]) {
+            log::warn("Imported opponent {}: no GDL voice bank is available", kind);
+        }
+    }
 }
 
 const LevelInfo* LevelOpponents::levelNow() const {
@@ -1115,8 +1242,10 @@ LevelOpponents::critterObstacles(std::span<const CombatantObstacle> fixtures) co
 }
 
 void LevelOpponents::syncFloors() {
+    m_importedActors.syncFloors();
     m_statues.syncFloors();
     m_enemies.syncFloors();
+    m_importedActors.syncLive(m_enemies);
     m_critters.syncFloors();
     m_generators.syncFloors();
 }
@@ -1134,8 +1263,9 @@ void LevelOpponents::beginOrdinaryFrame(f32 seconds, std::span<PlayerRuntime> pl
 }
 
 void LevelOpponents::countOrdinaryPlayers(std::span<const PlayerRuntime> players) {
-    m_generators.setPlayerCount(static_cast<s32>(std::ranges::count_if(
-        players, [](const PlayerRuntime& player) { return !player.departed; })));
+    const auto present = static_cast<s32>(std::ranges::count_if(
+        players, [](const PlayerRuntime& player) { return !player.departed; }));
+    m_generators.setPlayerCount(m_partyCountOverride.value_or(present));
 }
 
 void LevelOpponents::advanceCritters(s32 ticks, f32 seconds, std::span<const EnemyView> views,
@@ -1178,6 +1308,19 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
     const LevelInfo* level = m_resources->world.level();
     const f32 missileSpeed = level != nullptr ? level->tuning.enemyMissileSpeed : 1.0f;
     const bool timeStopped = PlayerPowerups::timeStopped(players);
+    if (m_importedActors.count() != 0) {
+        std::vector<EnemyView> living;
+        for (const auto& view : views) {
+            const auto player = std::ranges::find_if(players, [&](const PlayerRuntime& runtime) {
+                return runtime.actor.player() == view.player && !runtime.departed &&
+                       runtime.life == PlayerLife::Standing;
+            });
+            if (player != players.end()) {
+                living.push_back(view);
+            }
+        }
+        updateImportedActors(seconds, living, timeStopped);
+    }
     // The swarm answers the party's longest run of close blows, held still with time, when
     // the mechanics have it; otherwise it only cools.
     if (!timeStopped) {
@@ -1195,6 +1338,7 @@ void LevelOpponents::update(s32 ticks, f32 seconds, std::span<PlayerRuntime> pla
         {ticks, seconds, views, fixtures, stops, m_critters.targets(true), m_bosses.targets(),
          &m_resources->world.collision(), missileSpeed, timeStopped, m_sim.aggression},
         events.blastScenery, [this] { playBirths(); });
+    m_importedActors.syncLive(m_enemies);
     landEnemyMissiles(players, events);
     playEnemyCues();
     // What blows itself up goes up with the bomb's bang; one struck down stops crying out
@@ -1642,8 +1786,7 @@ void LevelOpponents::blast(const Vec3& position, f32 radius, f32 damage, std::ve
         // CritterDamage accumulates that input; distance is not blast force.
         const f32 across = portable::hypot(away.x, away.z);
         const Vec3 direction = across > 0 ? Vec3{away.x, 0.0f, away.z} / across : Vec3{0};
-        strikeCritter(critter, damage, flags, direction, -1, std::nullopt, false,
-                      players);
+        strikeCritter(critter, damage, flags, direction, -1, std::nullopt, false, players);
     }
 }
 
@@ -1674,8 +1817,14 @@ bool LevelOpponents::strikeGenerator(s32 id, f32 power, s32 byPlayer,
     }
     ItemArchive* archive =
         event->kind < 0 ? &m_resources->world.items() : m_enemies.archive(event->kind);
+    const auto importedSound =
+        std::ranges::find(m_importedGeneratorSounds, event->kind, &ImportedGeneratorSound::kind);
     const auto emission = GeneratorFeedbackEmission::resolve(
-        *event, archive, level, m_resources->world.ref().realmId, m_resources->world.ref().name);
+        *event, archive, level,
+        importedSound == m_importedGeneratorSounds.end() ? m_resources->world.ref().realmId
+                                                         : importedSound->realm,
+        importedSound == m_importedGeneratorSounds.end() ? m_resources->world.ref().name
+                                                         : importedSound->level);
     u32 effect = 0;
     if (publish) {
         const auto emitted = publish(emission);

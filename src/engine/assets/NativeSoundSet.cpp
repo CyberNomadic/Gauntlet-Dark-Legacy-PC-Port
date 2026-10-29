@@ -12,6 +12,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/AudioRom.h"
 #include "formats/SoundBank.h"
@@ -21,9 +22,9 @@ namespace gdl {
 bool SoundSet::loadNative(const std::filesystem::path& path) {
     try {
         const AssetLocator audio(path.parent_path());
-        const bool explicitFile = toLowerAscii(path.extension().string()) == ".vbk";
-        const auto name =
-            normalizeAssetName(explicitFile ? path.stem().string() : path.filename().string());
+        const bool explicitFile = toLowerAscii(paths::utf8(path.extension())) == ".vbk";
+        const auto name = normalizeAssetName(explicitFile ? paths::utf8(path.stem())
+                                                          : paths::utf8(path.filename()));
         formats::AudioRom directory;
         if (const auto rom = audio.find("audatps2.rom")) {
             directory = formats::AudioRom::parse(readFile(*rom));
@@ -36,9 +37,9 @@ bool SoundSet::loadNative(const std::filesystem::path& path) {
             }
         }
         const auto filename =
-            explicitFile ? path.filename().string() : (names ? names->file : name) + ".vbk";
+            explicitFile ? paths::utf8(path.filename()) : (names ? names->file : name) + ".vbk";
         auto bank = formats::SoundBank::parse(readFile(audio.require(filename)));
-        m_bank = normalizeAssetName(std::filesystem::path(filename).stem().string());
+        m_bank = normalizeAssetName(paths::utf8(std::filesystem::path(filename).stem()));
         const usize namedCount = names ? names->soundCount : 0;
         if (names && static_cast<usize>(names->firstSound) + namedCount > directory.sounds.size()) {
             throw FormatError("bank sound names exceed audio directory");
@@ -89,7 +90,7 @@ bool SoundSet::loadNative(const std::filesystem::path& path) {
         }
         return !m_entries.empty();
     } catch (const std::exception& e) {
-        log::warn("Native sound bank {}: {}", path.string(), e.what());
+        log::warn("Native sound bank {}: {}", paths::utf8(path), e.what());
         m_entries.clear();
         m_byName.clear();
         m_samples.clear();

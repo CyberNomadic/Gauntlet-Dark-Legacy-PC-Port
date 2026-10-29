@@ -22,7 +22,8 @@
 #include "game/app/AttractSequencer.h"
 #include "game/app/BuildLabel.h"
 #include "game/app/CommandLine.h"
-#include "game/app/DevConsole.h"
+#include "game/console/ConsoleCommands.h"
+#include "game/console/DevConsole.h"
 #include "game/app/LevelCompletion.h"
 #include "game/app/LevelDebugOverlay.h"
 #include "game/app/OnlineRun.h"
@@ -40,6 +41,8 @@
 #include "game/scenes/AttractScene.h"
 #include "game/scenes/GameContext.h"
 #include "game/scenes/IdleScreen.h"
+#include "game/scenes/LegendsMapCatalog.h"
+#include "game/scenes/LegendsPreview.h"
 #include "game/scenes/LevelLoadingScreen.h"
 #include "game/scenes/MovieScene.h"
 #include "game/scenes/PlayScene.h"
@@ -62,7 +65,6 @@ protected:
     void onUpdate(f64 deltaSeconds) override;
     void onRender(RenderDevice& device) override;
     void onShutdown() override;
-    void onFrameSpike(const FrameSpike& spike) override;
 
 private:
     bool startMovie(std::string_view name);
@@ -92,6 +94,44 @@ private:
     s32 consolePlayer();
     void consoleList(DevConsole& console, DevConsole::Arguments arguments);
     void consoleGoto(DevConsole& console, DevConsole::Arguments arguments);
+    std::vector<std::string> gotoWords(DevConsole::Arguments arguments) const;
+    /** `party_count`: the party size the level sets itself up for, or off. */
+    void consolePartyCount(DevConsole& console, DevConsole::Arguments arguments);
+    /** activate: presses a switch of the level in play, named by token, id or name. */
+    void consoleActivate(DevConsole& console, DevConsole::Arguments arguments);
+    /** lock and unlock: a character by its code, or a door or chest of the level in play. */
+    void consoleLock(DevConsole& console, DevConsole::Arguments arguments, bool unlock);
+    /** The switches of the world in play, with their state. */
+    std::vector<ConsoleCommands::SwitchEntry> consoleSwitches() const;
+    /** A door or chest of the level in play the console can name. */
+    struct ConsoleFixture {
+        SceneSelection::Kind kind = SceneSelection::Kind::Gate;
+        usize index = 0;
+        ConsoleCommands::NamedEntry entry;
+    };
+    std::vector<ConsoleFixture> consoleFixtures() const;
+    std::vector<std::string> activateWords(DevConsole::Arguments arguments) const;
+    std::vector<std::string> lockWords(DevConsole::Arguments arguments) const;
+    /** The installed Legends maps of a platform, found as the catalogue finds them. */
+    /** The Legends maps installed for a platform. The disk is walked on the first ask and
+     * whenever `rescan` asks (list maps, goto); the console's completion reads what was
+     * found, so typing costs nothing when there is no Legends content at all. */
+    std::vector<LegendsMapEntry> legendsMapsOf(LegendsPlatform platform,
+                                               bool rescan = false) const;
+    /** The folder of the Legends map named `name`: on `platform`, or on whichever has it. */
+    std::optional<std::pair<LegendsPlatform, std::filesystem::path>>
+    findLegendsMap(std::string_view name, std::optional<LegendsPlatform> platform) const;
+    /** Opens the Legends map in `directory` of `platform`, walked when `playable`, else flown
+     * through as a preview; `completedTravel` is finishLegendsTravel's own flag. */
+    void consoleLegendsOpen(DevConsole& console, LegendsPlatform platform,
+                            const std::filesystem::path& directory, bool playable,
+                            bool completedTravel = false);
+    /** Leaves a Legends map or its preview for the level left for it. */
+    void consoleLegendsClose(DevConsole& console);
+    void updateLegendsPreview(f64 deltaSeconds);
+    bool commitLegendsProgress();
+    bool closeLegendsLevel(bool keepProgress = true);
+    void finishLegendsTravel();
     void consoleUnlockTower(DevConsole& console);
     void consoleGet(DevConsole& console, DevConsole::Arguments arguments);
     void consoleSpawn(DevConsole& console, DevConsole::Arguments arguments);
@@ -115,7 +155,6 @@ private:
     void consoleHideHud(DevConsole& console);
     void consoleFreeCam(DevConsole& console);
     void consoleNoclip(DevConsole& console);
-    void consoleSpikes(DevConsole& console, DevConsole::Arguments arguments);
     /** Picks what stands under `cursor` in the view for the console, or lets the selection
      * go without one; the console's $SELECTED follows. */
     void consoleSelect(std::optional<Vec2> cursor);
@@ -160,9 +199,12 @@ private:
     LevelDebugOverlay m_levelDebug;
     DevConsole m_console;
     FreeCamera m_freeCamera;
+    LegendsPreview m_legendsPreview;
+    mutable std::array<std::optional<std::vector<LegendsMapEntry>>, 2> m_legendsMaps;
     std::array<NoclipMotion, static_cast<usize>(PlayScene::kPlayerCount)> m_noclip;
     std::array<PlayScene::ConsoleCheats, static_cast<usize>(PlayScene::kPlayerCount)>
         m_consoleCheats{};
+    std::optional<s32> m_partyCountOverride; ///< the console's party_count, across levels
     bool m_hudHidden = false;
     std::string m_version;
     std::unique_ptr<OnlineRun> m_online;
@@ -186,6 +228,7 @@ private:
     StringTable m_strings;
     std::unique_ptr<AudioDevice> m_audio;
     std::unique_ptr<SoundPlayer> m_sounds;
+    std::unique_ptr<SoundPlayer> m_legendsSounds;
     std::unique_ptr<AssetLocator> m_assets;
     AttractSequencer m_attract;
     AttractScene m_demo;
@@ -208,6 +251,9 @@ private:
     };
     std::unique_ptr<PlaySession> m_play = std::make_unique<PlaySession>();
     std::unique_ptr<PlaySession> m_parent; ///< stage retained during a secret challenge
+    std::unique_ptr<PlaySession>
+        m_legendsOrigin; ///< paused GDL scene during an offline native visit
+    std::vector<PartyMember> m_legendsEntryParty;
     PauseMenu m_pause;
     MusicDuck m_musicDuck; ///< the music under the pause menu
     AfterLevelScene m_afterLevel;

@@ -155,6 +155,9 @@ public:
         bool wholePartyReady = false;
         bool returning = false;
         bool forced = false;
+        /** A player stands on it (did_generate past one): a height target that goes clear of
+         * collision as it moves holds still until they step off, as ProcessItemWobjs does. */
+        bool ridden = false;
         f32 alpha = 1;
         Vec3 origin{0};
         f32 height = 0;
@@ -164,6 +167,9 @@ public:
         Vec3 spot{0};
         s32 sound = -1;
         bool operator==(const Target&) const = default;
+        /** Whether it is a height target that waits for its riders to leave before moving:
+         * neither animated nor a fade, and not one that keeps blocking while it moves. */
+        bool holdsForRiders() const;
     };
 
     /** Exact state of this owner, including contacts and undelivered events.
@@ -247,6 +253,9 @@ public:
     /** A thrown weapon, a burst or a blast has hit a shootable trigger: on the next update it
      * goes off as though the whole party stood in it (ItemDamage's trigger case). */
     void shoot(usize index);
+    /** The developer console presses any trigger: on the next update it goes off as though
+     * the whole party stood in it, camera cue and all. False for one the party cannot use. */
+    bool press(usize index);
     /** The crystals a realm's gate wants; none for realms without one. */
     static s32 crystalsNeeded(s32 realm);
     /** Whether one visitor meets a realm's crystal gate: Sumner, a completed (negative) count

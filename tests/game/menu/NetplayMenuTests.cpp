@@ -33,7 +33,7 @@ TEST_CASE("netplay menu drills into host join and readiness without starting fro
     CHECK(setting.action == NetplayMenu::Action::Capacity);
     CHECK(setting.direction == -1);
     menu.update(down);
-    menu.update(down);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::GameSettings);
     menu.update(down);
     CHECK(menu.update(confirm).action == NetplayMenu::Action::SelectCharacters);
     menu.update(down);
@@ -42,6 +42,52 @@ TEST_CASE("netplay menu drills into host join and readiness without starting fro
     menu.render(device, makeScreenProjection(1280, 720), 1280, 720);
     CHECK_FALSE(device.draws.empty());
 }
+TEST_CASE("the game settings page lets the host set the rules and a guest read them",
+          "[netplay][netplay-menu][room-settings]") {
+    test::FakeRenderDevice device;
+    NetplayMenu menu;
+    NetplayMenu::View view;
+    view.page = NetplayMenu::Page::Settings;
+    view.host = true;
+    view.connected = true;
+    view.settings.aggressor = 1;
+    menu.show(device, view);
+    REQUIRE(menu.rows() == 5);
+    MenuInput confirm;
+    confirm.select = true;
+    MenuInput down;
+    down.down = true;
+    MenuInput right;
+    right.right = true;
+    const auto difficulty = menu.update(right);
+    CHECK(difficulty.action == NetplayMenu::Action::Difficulty);
+    CHECK(difficulty.direction == 1);
+    menu.update(down);
+    CHECK(menu.update(right).action == NetplayMenu::Action::FriendlyFire);
+    menu.update(down);
+    CHECK(menu.update(right).action == NetplayMenu::Action::Camera);
+    menu.update(down);
+    const auto aggressor = menu.update(right);
+    CHECK(aggressor.action == NetplayMenu::Action::Aggressor);
+    CHECK(aggressor.direction == 1);
+    menu.update(down);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::Back);
+    // A guest reads the rules: every row but Back is greyed, so the cursor rests on Back.
+    view.host = false;
+    view.page = NetplayMenu::Page::Settings;
+    menu.show(device, view);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::Back);
+    menu.update(down);
+    CHECK(menu.update(right).action == NetplayMenu::Action::None);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::Back);
+    // The joined page reaches the same page, read only: its first live row.
+    view.page = NetplayMenu::Page::Guest;
+    menu.show(device, view);
+    CHECK(menu.update(confirm).action == NetplayMenu::Action::GameSettings);
+    menu.render(device, makeScreenProjection(1280, 720), 1280, 720);
+    CHECK_FALSE(device.draws.empty());
+}
+
 TEST_CASE("online menu mouse hitboxes honor letterboxing and disabled actions",
           "[netplay][netplay-menu]") {
     test::FakeRenderDevice device;

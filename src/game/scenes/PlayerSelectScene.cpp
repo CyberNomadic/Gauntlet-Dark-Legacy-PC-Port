@@ -8,9 +8,11 @@
 #include "engine/core/Assert.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/platform/Paths.h"
 
 #include "game/characters/Progression.h"
 #include "game/config/ControlProfiles.h"
+#include "game/menu/MenuFont.h"
 #include "game/players/PickupVoices.h"
 
 namespace gdl::game {
@@ -20,7 +22,6 @@ namespace {
 constexpr std::string_view kSelectDirectory = "SELECT";
 constexpr std::string_view kStaticDirectory = "STATIC";
 constexpr std::string_view kClassDataDirectory = "pdata";
-constexpr std::string_view kFont32File = "fonts/font32.json";
 constexpr std::string_view kFont8File = "fonts/font8x8.json";
 constexpr std::string_view kInitialsFile = "fonts/initials.json";
 constexpr std::string_view kCommonSounds = "audio/COMMON";
@@ -206,10 +207,10 @@ bool PlayerSelectScene::loadResources(RenderDevice& device,
     if (!m_selectTextures.load(unpackedRoot / kSelectDirectory) ||
         !m_staticTextures.load(unpackedRoot / kStaticDirectory)) {
         log::warn("Player select: unpacked textures not found under {} (run gdlunpack)",
-                  unpackedRoot.string());
+                  paths::utf8(unpackedRoot));
         return false;
     }
-    if (!m_font32.load(unpackedRoot / kFont32File, kFont32SpaceWidth) ||
+    if (!loadMenuFont(m_font32, unpackedRoot, kFont32SpaceWidth) ||
         !m_font8.load(unpackedRoot / kFont8File, kFont8SpaceWidth) ||
         !m_fontInitials.load(unpackedRoot / kInitialsFile, kInitialsSpaceWidth)) {
         return false;
@@ -241,7 +242,8 @@ void PlayerSelectScene::loadSounds(const std::filesystem::path& unpackedRoot) {
     }
     if (!m_commonSounds.load(unpackedRoot / kCommonSounds) ||
         !m_selectSounds.load(unpackedRoot / kSelectSounds)) {
-        log::warn("Player select: unpacked sound banks not found under {}", unpackedRoot.string());
+        log::warn("Player select: unpacked sound banks not found under {}",
+                  paths::utf8(unpackedRoot));
     }
     m_narratorSounds.load(unpackedRoot / "audio/VOICE1");
 }

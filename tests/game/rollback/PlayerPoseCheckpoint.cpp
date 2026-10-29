@@ -26,7 +26,7 @@ void pose(std::vector<u8>& bytes, const NodePose& value) {
     vector(bytes, value.rotation);
     vector(bytes, value.position);
     vector(bytes, value.scale);
-    word(bytes, value.pitchYawRoll ? 1U : 0U);
+    word(bytes, static_cast<u32>(value.rotationOrder));
 }
 std::optional<NodePose> pose(ByteReader& reader) {
     NodePose value;
@@ -34,10 +34,10 @@ std::optional<NodePose> pose(ByteReader& reader) {
     value.position = vector(reader);
     value.scale = vector(reader);
     const u32 order = reader.readU32();
-    if (order > 1) {
+    if (order > static_cast<u32>(NodePose::RotationOrder::YawPitchRoll)) {
         return std::nullopt;
     }
-    value.pitchYawRoll = order != 0;
+    value.rotationOrder = static_cast<NodePose::RotationOrder>(order);
     return value;
 }
 std::string name(ByteReader& reader, usize size) {

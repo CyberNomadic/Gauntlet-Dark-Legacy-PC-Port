@@ -226,7 +226,7 @@ template <class Codec, class IO, class T> bool block(IO& io, T& value) {
 }
 
 template <class IO, class T> bool pose(IO& io, T& value) {
-    return io(value.rotation, value.position, value.scale, value.pitchYawRoll);
+    return io(value.rotation, value.position, value.scale, value.rotationOrder);
 }
 
 template <class IO, class T> bool animator(IO& io, T& value, usize& nodesLeft) {
@@ -347,6 +347,21 @@ template <class IO, class T> bool event(IO& io, T& value) {
     }
 }
 
+/** The count, then every one of the set's views with the point its camera looks at. */
+template <class IO, class V> bool viewSet(IO& io, V& views) {
+    if (!io(views.count) || views.count > ViewSet::kMost) {
+        return false;
+    }
+    for (usize i = 0; i < ViewSet::kMost; ++i) {
+        auto& eye = views.eyes[i];
+        if (!io(eye.position, eye.right, eye.up, eye.forward, eye.sinX, eye.cosX, eye.sinY,
+                eye.cosY, views.attentions[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template <class IO, class T> bool pool(IO& io, T& state) {
     // the archive reads them back
     // NOLINTNEXTLINE(misc-const-correctness)
@@ -361,10 +376,7 @@ template <class IO, class T> bool pool(IO& io, T& state) {
             state.scales.players, state.contactGridOrigin, state.contactGridInverseWidth,
             state.bomber, state.inView, state.frame, state.pendingTicks, state.pendingSeconds,
             state.shrink) ||
-        !optional(io, state.view, [&](auto& view) {
-            return io(view.position, view.right, view.up, view.forward, view.sinX, view.cosX,
-                      view.sinY, view.cosY);
-        })) {
+        !optional(io, state.view, [&](auto& views) { return viewSet(io, views); })) {
         return false;
     }
     if (!vector(io, state.stocks, kEnemyKindCount, 16, [&](auto& stock) {

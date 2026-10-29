@@ -12,6 +12,7 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
+#include "game/config/ControlProfiles.h"
 #include "game/menu/SettingsMenu.h"
 #include "game/menu/SettingsRows.h"
 
@@ -97,15 +98,15 @@ TEST_CASE("Game Options exposes optional shop stock and autosaving", "[settings]
     f.right();
     CHECK(f.config.game.autoSave);
     f.release();
-    CHECK(f.config.game.aggressorMode);
+    CHECK_FALSE(f.config.game.aggressorMode);
     CHECK(f.menu.menu().definition().items[5].text == "Aggressor Mode");
     f.focus(6);
     f.right();
-    CHECK_FALSE(f.config.game.aggressorMode);
+    CHECK(f.config.game.aggressorMode);
     f.release();
     f.fail = true;
     f.right();
-    CHECK_FALSE(f.config.game.aggressorMode);
+    CHECK(f.config.game.aggressorMode);
     CHECK(f.writes == 3);
 }
 
@@ -165,17 +166,20 @@ TEST_CASE("mouse operates settings pages sliders and graphics without keyboard c
     click(3);
     REQUIRE(f.menu.page() == SettingsMenu::Page::Graphics);
     const bool wasVsync = f.menu.config().display.vsync;
-    click(0);
+    click(1);
     CHECK(f.menu.config().display.vsync != wasVsync);
     const s32 writesBeforeVideo = f.writes;
-    click(10);
+    click(12);
     REQUIRE(f.menu.menu().definition().items.size() == 2);
     CHECK(f.writes == writesBeforeVideo);
     click(0);
-    REQUIRE(f.menu.menu().definition().items.size() == 13);
+    REQUIRE(f.menu.menu().definition().items.size() == 14);
     CHECK(f.writes == writesBeforeVideo + 1);
     CHECK(f.config.display.vsync != wasVsync);
-    click(12);
+    // No Back row: the back control (the mouse's second button maps to it) leaves the page.
+    MenuInput leave;
+    leave.back = true;
+    f.menu.update(leave, 1);
     CHECK(f.menu.page() == SettingsMenu::Page::Root);
 }
 
@@ -483,10 +487,12 @@ TEST_CASE("Video stages discrete choices until Apply and ignores Confirm on sett
     REQUIRE(f.menu.menu().definition().items[3].text == "Video");
     f.select();
     REQUIRE(f.menu.page() == SettingsMenu::Page::Graphics);
-    REQUIRE(f.menu.menu().definition().items.size() == 13);
-    CHECK(f.menu.menu().definition().items[0].value == "On");
-    CHECK(f.menu.menu().definition().items[1].value == "30");
-    CHECK(f.menu.menu().definition().items[2].value == "Off");
+    REQUIRE(f.menu.menu().definition().items.size() == 14);
+    CHECK(f.menu.menu().definition().items[0].value == "Vulkan");
+    CHECK(f.menu.menu().definition().items[1].value == "On");
+    CHECK(f.menu.menu().definition().items[2].value == "30");
+    CHECK(f.menu.menu().definition().items[3].value == "Off");
+    f.down();
     f.fail = true;
     f.select();
     CHECK(f.config.display.vsync);
@@ -502,7 +508,7 @@ TEST_CASE("Video stages discrete choices until Apply and ignores Confirm on sett
         f.right();
         CHECK(f.menu.config().display.maxFrameRate == rate);
         CHECK(f.menu.config().timing.gameplayFrameRate == rate);
-        CHECK(f.menu.menu().definition().items[1].value ==
+        CHECK(f.menu.menu().definition().items[2].value ==
               (rate == 0 ? "Unlimited" : std::to_string(rate)));
     }
     f.fail = true;
@@ -549,27 +555,27 @@ TEST_CASE("Video chooses supported resolutions and borderless uses the desktop w
     f.down();
     f.down();
     f.down();
-    REQUIRE(f.menu.menu().selection() == 4); // Windowed resolution is skipped.
-    CHECK_FALSE(f.menu.menu().definition().items[3].enabled);
+    REQUIRE(f.menu.menu().selection() == 5); // Windowed resolution is skipped.
+    CHECK_FALSE(f.menu.menu().definition().items[4].enabled);
     f.right();
     CHECK(f.menu.config().display.windowMode == WindowMode::Fullscreen);
     MenuInput up;
     up.up = true;
     f.menu.update(up, 1);
-    REQUIRE(f.menu.menu().selection() == 3);
+    REQUIRE(f.menu.menu().selection() == 4);
     f.right();
     CHECK(f.menu.config().display.windowWidth == 1280);
     CHECK(f.menu.config().display.windowHeight == 720);
     f.down();
     f.right();
     CHECK(f.menu.config().display.windowMode == WindowMode::BorderlessFullscreen);
-    CHECK(f.menu.menu().definition().items[3].value == "1920 x 1080");
-    CHECK_FALSE(f.menu.menu().definition().items[3].enabled);
+    CHECK(f.menu.menu().definition().items[4].value == "1920 x 1080");
+    CHECK_FALSE(f.menu.menu().definition().items[4].enabled);
     CHECK(f.menu.config().display.windowWidth == 1280);
     f.right();
     CHECK(f.menu.config().display.windowMode == WindowMode::Windowed);
-    CHECK(f.menu.menu().definition().items[3].value == "1280 x 720");
-    CHECK_FALSE(f.menu.menu().definition().items[3].enabled);
+    CHECK(f.menu.menu().definition().items[4].value == "1280 x 720");
+    CHECK_FALSE(f.menu.menu().definition().items[4].enabled);
 }
 
 TEST_CASE("fullscreen replaces a custom window size with an advertised desktop mode",
@@ -585,7 +591,7 @@ TEST_CASE("fullscreen replaces a custom window size with an advertised desktop m
     f.down();
     f.down();
     f.down();
-    REQUIRE(f.menu.menu().selection() == 4);
+    REQUIRE(f.menu.menu().selection() == 5);
     f.right();
     CHECK(f.menu.config().display.windowMode == WindowMode::Fullscreen);
     CHECK(f.menu.config().display.windowWidth == 1920);
@@ -625,15 +631,16 @@ TEST_CASE("graphics page fits parchment and returns to its entry in every menu s
                       f.painter.measure(item.text, definition.scale) <=
                   512 - 64);
             if (!item.value.empty()) {
+                CHECK(f.menu.menu().itemY(static_cast<s32>(i)) >= f.menu.menu().titleBottom());
                 CHECK(f.menu.menu().itemY(static_cast<s32>(i)) +
                           static_cast<s32>(32 * definition.scale) + 12 <
-                      300);
+                      316);
                 CHECK(definition.valueX > f.menu.menu().itemX(static_cast<s32>(i)) +
                                               f.painter.measure(item.text, definition.scale));
                 CHECK(definition.valueX + f.painter.measure(item.value, definition.scale) + 11 <=
                       448);
             } else {
-                CHECK(f.menu.menu().itemY(static_cast<s32>(i)) == 300);
+                CHECK(f.menu.menu().itemY(static_cast<s32>(i)) == 316);
             }
         }
         f.back();
@@ -651,10 +658,11 @@ TEST_CASE("the expanded Video page keeps native font rows and its action bar sep
     f.menu.open(f.config, &f.strings, {}, f.painter, {}, MenuDefinition::parchment());
     f.choose(4);
     const auto& definition = f.menu.menu().definition();
-    REQUIRE(definition.items.size() == 13);
-    REQUIRE(definition.items[9].text == "Smooth Sprites");
+    REQUIRE(definition.items.size() == 14);
+    REQUIRE(definition.items[0].text == "Renderer");
+    REQUIRE(definition.items[11].text == "Smooth Sprites");
     const s32 height = f.painter.lineHeight(definition.scale);
-    for (s32 row = 0; row < 10; ++row) {
+    for (s32 row = 0; row < 11; ++row) {
         CAPTURE(row, height, definition.scale);
         CHECK(f.menu.menu().itemY(row) + height < f.menu.menu().itemY(row + 1));
     }
@@ -672,7 +680,7 @@ TEST_CASE("custom file frame rates are shown honestly until a supported choice i
         },
         f.painter, {}, {}, SettingsMenu::Scope::Level);
     f.choose(4);
-    CHECK(f.menu.menu().definition().items[1].value == "24");
+    CHECK(f.menu.menu().definition().items[2].value == "24");
     f.down();
     f.right();
     CHECK(f.menu.config().timing.gameplayFrameRate == 30);
@@ -774,39 +782,39 @@ TEST_CASE("Video preview requires confirmation and uses a wall-clock rollback de
     CHECK(active.display.vsync);
     f.down();
     f.down();
-    f.down(); // skips unavailable resolution/window mode, reaches Depth of Field
-    CHECK(f.menu.menu().definition().items[5].text == "Depth of Field");
+    f.down(); // skips unavailable resolution, window mode and display, reaches Depth of Field
+    CHECK(f.menu.menu().definition().items[7].text == "Depth of Field");
     f.right();
     CHECK(f.menu.config().display.depthOfField);
     CHECK_FALSE(active.display.depthOfField);
     f.down();
-    REQUIRE(f.menu.menu().selection() == 6);
-    CHECK(f.menu.menu().definition().items[6].text == "Bloom");
+    REQUIRE(f.menu.menu().selection() == 8);
+    CHECK(f.menu.menu().definition().items[8].text == "Bloom");
     f.right();
     CHECK(f.menu.config().display.bloom);
     CHECK_FALSE(active.display.bloom);
     f.down();
-    REQUIRE(f.menu.menu().selection() == 7);
-    CHECK(f.menu.menu().definition().items[7].text == "Ambient Occlusion");
+    REQUIRE(f.menu.menu().selection() == 9);
+    CHECK(f.menu.menu().definition().items[9].text == "Ambient Occlusion");
     f.right();
     CHECK(f.menu.config().display.ambientOcclusion);
     CHECK_FALSE(active.display.ambientOcclusion);
     f.down();
-    REQUIRE(f.menu.menu().selection() == 8);
-    CHECK(f.menu.menu().definition().items[8].text == "Texture Filtering");
-    CHECK(f.menu.menu().definition().items[8].value == "8x Anisotropic");
+    REQUIRE(f.menu.menu().selection() == 10);
+    CHECK(f.menu.menu().definition().items[10].text == "Texture Filtering");
+    CHECK(f.menu.menu().definition().items[10].value == "8x Anisotropic");
     f.right();
     CHECK(f.menu.config().display.textureFiltering == 16);
     CHECK(active.display.textureFiltering == 8);
     f.down();
-    REQUIRE(f.menu.menu().selection() == 9);
-    CHECK(f.menu.menu().definition().items[9].text == "Smooth Sprites");
-    CHECK(f.menu.menu().definition().items[9].value == "Off");
+    REQUIRE(f.menu.menu().selection() == 11);
+    CHECK(f.menu.menu().definition().items[11].text == "Smooth Sprites");
+    CHECK(f.menu.menu().definition().items[11].value == "Off");
     f.right();
     CHECK(f.menu.config().display.smoothSprites);
     CHECK_FALSE(active.display.smoothSprites);
     f.down();
-    REQUIRE(f.menu.menu().selection() == 10);
+    REQUIRE(f.menu.menu().selection() == 12);
     f.select();
     REQUIRE(f.menu.menu().definition().items.size() == 2);
     CHECK(f.menu.menu().selection() == 1); // default to Revert, not Save
@@ -846,7 +854,7 @@ TEST_CASE("Video preview requires confirmation and uses a wall-clock rollback de
         CHECK(active.display.vsync);
         CHECK(previews == 2);
         CHECK(f.writes == 0);
-        CHECK(f.menu.menu().definition().items.size() == 13);
+        CHECK(f.menu.menu().definition().items.size() == 14);
         CHECK_FALSE(active.display.smoothSprites);
         CHECK(active.display.textureFiltering == 8);
         CHECK_FALSE(active.display.depthOfField);
@@ -891,9 +899,9 @@ TEST_CASE("Video defaults stay staged and the action row navigates horizontally"
     f.down();
     f.down();
     f.down();
-    REQUIRE(f.menu.menu().selection() == 10);
+    REQUIRE(f.menu.menu().selection() == 12);
     f.right();
-    REQUIRE(f.menu.menu().selection() == 11);
+    REQUIRE(f.menu.menu().selection() == 13);
     f.select();
     CHECK(f.menu.config().display.vsync);
     CHECK_FALSE(f.menu.config().display.depthOfField);
@@ -906,12 +914,13 @@ TEST_CASE("Video defaults stay staged and the action row navigates horizontally"
     MenuInput up;
     up.up = true;
     f.menu.update(up, 1);
-    CHECK(f.menu.menu().selection() == 9); // last enabled setting: Smooth Sprites
+    CHECK(f.menu.menu().selection() == 11); // last enabled setting: Smooth Sprites
     f.down();
     f.right();
+    REQUIRE(f.menu.menu().selection() == 13); // the row is Apply and Restore Defaults alone
     f.right();
     REQUIRE(f.menu.menu().selection() == 12);
-    f.select();
+    f.back();
     CHECK(f.menu.page() == SettingsMenu::Page::Root);
     CHECK_FALSE(f.menu.config().display.vsync);
     CHECK(f.writes == 0);
@@ -926,11 +935,11 @@ TEST_CASE("Video rollback preserves a manually resized window", "[settings][grap
                     return true;
                 });
     f.choose(4);
-    CHECK(f.menu.menu().definition().items[3].value == "1152 x 700");
+    CHECK(f.menu.menu().definition().items[4].value == "1152 x 700");
     f.down();
     f.down();
     f.down();
-    REQUIRE(f.menu.menu().selection() == 4);
+    REQUIRE(f.menu.menu().selection() == 5);
     f.right();
     f.down();
     f.down();
@@ -975,7 +984,7 @@ TEST_CASE("Video font and columns reserve the widest choices before selecting th
     }
     f.down();
     f.down(); // skips resolution while windowed
-    REQUIRE(f.menu.menu().selection() == 4);
+    REQUIRE(f.menu.menu().selection() == 5);
     for (s32 i = 0; i < 3; ++i) {
         f.right();
         unchanged();
@@ -1017,7 +1026,7 @@ TEST_CASE("Restore Defaults previews the default window size and thirty fps befo
     for (s32 i = 0; i < 9; ++i) {
         f.down();
     }
-    REQUIRE(f.menu.menu().selection() == 10);
+    REQUIRE(f.menu.menu().selection() == 12);
     f.right();
     f.select();
     CHECK(f.menu.config().display.windowMode == WindowMode::Windowed);
@@ -1090,7 +1099,7 @@ TEST_CASE("Controls is available in every scope and opening it does not mutate b
         f.menu.menu().focus(static_cast<usize>(controls - items.begin()));
         f.select();
         CHECK(f.menu.page() == SettingsMenu::Page::Controls);
-        CHECK(f.menu.menu().definition().items.size() == 5);
+        CHECK(f.menu.menu().definition().items.size() == 4);
         CHECK(f.config.toJson() == bindings);
         CHECK(f.writes == 0);
     }
@@ -1240,10 +1249,10 @@ TEST_CASE("controller default rows expose stick directions and potion gestures b
     f.right(); // Player 1 skips None.
     REQUIRE(f.menu.menu().definition().items[0].value == "XInput Controller 1");
     CHECK(f.menu.menu().definition().items[1].value == "Left Stick Up");
-    f.menu.menu().focus(8);
-    f.right();
-    CHECK(f.menu.menu().definition().items[3].value == "X (hold)");
-    CHECK(f.menu.menu().definition().items[4].value == "X (double tap)");
+    // The actions stand in one column after the device: the potion gestures on their rows.
+    CHECK(f.menu.menu().definition().items[9].text == "Throw Potion");
+    CHECK(f.menu.menu().definition().items[9].value == "X (hold)");
+    CHECK(f.menu.menu().definition().items[10].value == "X (double tap)");
     CHECK(f.writes == 0);
     // An unplugged device cannot remove the last available input route.
     physical.setPad(0, {});
@@ -1254,8 +1263,8 @@ TEST_CASE("controller default rows expose stick directions and potion gestures b
     CHECK(f.menu.menu().definition().body == std::vector<std::string>{"COULD NOT SAVE SETTINGS"});
 }
 
-TEST_CASE("control pages sit above a horizontal action bar and arrows support mouse paging",
-          "[settings][controls][mouse]") {
+TEST_CASE("control rows scroll in one column above a horizontal action row",
+          "[settings][controls][mouse][scroll-menu]") {
     Fixture f;
     const bool rumble = GENERATE(false, true);
     Input physical;
@@ -1275,53 +1284,124 @@ TEST_CASE("control pages sit above a horizontal action bar and arrows support mo
     f.menu.update(readPlayerMenuInput(physical, f.config, 0), 1);
     const auto& menu = f.menu.menu();
     const auto& definition = menu.definition();
-    // The device, its control scheme, six actions and the rumble row when there is one.
-    const usize page = rumble ? 9 : 8;
-    REQUIRE(definition.items.size() == page + 4);
-    CHECK(definition.items[page].text.empty());
-    CHECK(definition.items[page].value == "Page 1/4");
-    REQUIRE(definition.items[page].valueColumn);
-    const auto pageColumn = *definition.items[page].valueColumn;
-    CHECK(std::abs(pageColumn.x * 2 + pageColumn.width - 512) <= 1);
-    CHECK(pageColumn.width == f.painter.measure("Page 1/4", definition.scale));
-    CHECK(menu.itemX(page) == pageColumn.x);
-    CHECK(menu.itemArea(page).x < pageColumn.x); // the left arrow is clickable too
-    CHECK(menu.itemX(0) < pageColumn.x);
-    CHECK(pageColumn.x < definition.valueX);
-    CHECK(menu.itemY(page) > menu.itemY(page - 1) + menu.lineHeight());
-    CHECK(definition.items[page + 1].text == "Apply");
-    CHECK(definition.items[page + 2].text == "Restore Defaults");
-    CHECK(definition.items[page + 3].text == "Back");
-    CHECK(menu.itemY(page) < menu.itemY(page + 1));
-    CHECK(menu.itemY(page + 1) == menu.itemY(page + 2));
-    CHECK(menu.itemY(page + 2) == menu.itemY(page + 3));
-    for (usize i = page + 1; i < page + 3; ++i) {
-        const auto box = menu.itemArea(i);
-        CHECK(box.x + box.width < menu.itemArea(i + 1).x);
+    // The device and the keyboard's scheme (Automatic keeps the keyboard), every action, the
+    // gestures and the rumble row when there is one, then Apply and Restore Defaults in a
+    // row of their own.
+    const auto actions = controlActions().size();
+    const usize rows = 2 + actions + 1 + (rumble ? 1 : 0);
+    REQUIRE(definition.items.size() == rows + 2);
+    CHECK(definition.visibleRows == ControlSettings::kVisibleRows);
+    REQUIRE(definition.tailPositions.size() == 2);
+    const usize apply = rows;
+    CHECK(definition.items[apply].text == "Apply");
+    CHECK(definition.items[apply + 1].text == "Restore Defaults");
+    CHECK(menu.itemY(apply) == menu.itemY(apply + 1));
+    CHECK(menu.itemArea(apply).x + menu.itemArea(apply).width < menu.itemArea(apply + 1).x);
+    CHECK(std::abs((menu.itemArea(apply).x + menu.itemArea(apply + 1).x +
+                    menu.itemArea(apply + 1).width) -
+                   512) <= 2 * definition.scale * 8 + 2);
+    // Only the window's rows are in view; the rest wait below it, with no area to click.
+    CHECK(menu.scroll() == 0);
+    CHECK(menu.windowRows() == ControlSettings::kVisibleRows);
+    CHECK(menu.shown(0));
+    CHECK(menu.shown(static_cast<usize>(ControlSettings::kVisibleRows - 1)));
+    CHECK_FALSE(menu.shown(static_cast<usize>(ControlSettings::kVisibleRows)));
+    CHECK(menu.itemArea(static_cast<usize>(ControlSettings::kVisibleRows)).width == 0);
+    CHECK(menu.itemY(static_cast<usize>(ControlSettings::kVisibleRows - 1)) < menu.itemY(apply));
+    for (usize i = 1; i < static_cast<usize>(ControlSettings::kVisibleRows); ++i) {
+        CHECK(menu.itemY(i) == menu.itemY(i - 1) + 18); // the editor's own row step
     }
-    MenuInput click;
-    click.pointer =
-        Vec2{static_cast<f32>(pageColumn.x - 8), static_cast<f32>(menu.itemY(page) + 2)};
-    click.pointerPressed = true;
-    f.menu.update(click, 1);
-    CHECK(menu.definition().items[page].value == "Page 4/4");
-    click.pointer->x = static_cast<f32>(pageColumn.x + pageColumn.width + 8);
-    f.menu.update(click, 1);
-    CHECK(menu.definition().items[page].value == "Page 1/4");
+    // Walking down scrolls the window along; the wheel does the same, a row a notch.
+    for (s32 i = 0; i < ControlSettings::kVisibleRows; ++i) {
+        f.down();
+    }
+    CHECK(menu.selection() == ControlSettings::kVisibleRows);
+    CHECK(menu.scroll() == 1);
+    CHECK(menu.shown(static_cast<usize>(ControlSettings::kVisibleRows)));
+    CHECK_FALSE(menu.shown(0));
+    MenuInput wheel;
+    wheel.pointerScroll = -1.0f;
+    f.menu.update(wheel, 1);
+    CHECK(menu.selection() == ControlSettings::kVisibleRows); // the wheel moves the window alone
+    CHECK(menu.scroll() == 2);
+    wheel.pointerScroll = 3.0f;
+    f.menu.update(wheel, 1);
+    CHECK(menu.selection() == ControlSettings::kVisibleRows);
+    CHECK(menu.scroll() == 0);
+    f.down(); // a key brings the window back to the selection
+    CHECK(menu.selection() == ControlSettings::kVisibleRows + 1);
+    CHECK(menu.scroll() == 2);
+    f.menu.update(wheel, 1);
+    CHECK(menu.scroll() == 0);
+    f.menu.menu().focus(static_cast<usize>(ControlSettings::kVisibleRows - 2));
+    CHECK(menu.scroll() == 0);
+    f.menu.menu().scrollWindow(2);
+    CHECK(menu.scroll() == 2); // still in the window: it does not scroll back
+    // A row chosen in the window's middle leaves the window where it is when the page is
+    // written again for it, instead of bringing the row to the window's edge.
+    f.focus(107); // the gestures row, near the column's end
+    const s32 held = menu.scroll();
+    CHECK(held > 2);
+    MenuInput upOne;
+    upOne.up = true;
+    f.menu.update(upOne, 1);
+    f.menu.update(upOne, 1);
+    CHECK(menu.scroll() == held);
+    const s32 chosen = menu.selection();
+    f.select(); // a binding row: the capture begins and the page is written again
+    CHECK(menu.selection() == chosen);
+    CHECK(menu.scroll() == held);
+    // The bar stands at the right hand of the value column.
+    CHECK(menu.columnRight() > definition.valueX + definition.valueWidth);
+    f.menu.update({}, 600); // the capture times out; the window still stands
+    CHECK(menu.scroll() == held);
+    // The action row is reached from the column's end and leads back to its ends.
+    f.focus(104);
+    REQUIRE(menu.selection() == static_cast<s32>(apply));
     f.right();
-    CHECK(menu.definition().items[page].value == "Page 2/4");
-    f.down();
-    REQUIRE(menu.selection() == page + 1);
+    CHECK(menu.selection() == static_cast<s32>(apply) + 1);
     f.right();
-    CHECK(menu.selection() == page + 2);
-    f.right();
-    CHECK(menu.selection() == page + 3);
-    f.right();
-    CHECK(menu.selection() == page + 1);
+    CHECK(menu.selection() == static_cast<s32>(apply));
     MenuInput up;
     up.up = true;
     f.menu.update(up, 1);
-    CHECK(menu.selection() == page);
+    CHECK(menu.selection() == static_cast<s32>(rows) - 1);
+    CHECK(menu.shown(rows - 1));
+    f.down();
+    CHECK(menu.selection() == static_cast<s32>(apply));
+    f.down();
+    CHECK(menu.selection() == 0);
+    CHECK(menu.scroll() == 0);
+}
+
+TEST_CASE("a player's potion gestures are a row of their own and are kept with the profile",
+          "[settings][controls][gestures]") {
+    Fixture f;
+    f.menu.menu().focus(4);
+    f.select();
+    f.select(); // player 1, the keyboard
+    f.right();  // Automatic -> keyboard
+    const auto& items = f.menu.menu().definition().items;
+    const auto gestures = std::ranges::find(items, 107, &MenuItem::code);
+    REQUIRE(gestures != items.end());
+    CHECK(gestures->text == "Hold / Double Tap");
+    CHECK(gestures->value == "Off");
+    const auto throwRow = std::ranges::find(items, 8, &MenuItem::code);
+    REQUIRE(throwRow != items.end());
+    CHECK(throwRow->value == "Q");
+    f.focus(107);
+    f.right();
+    CHECK(std::ranges::find(items, 107, &MenuItem::code)->value == "On");
+    CHECK_FALSE(f.config.controls[0].play.keyboardMagicGestures);
+    f.applyControls();
+    CHECK(f.config.controls[0].play.keyboardMagicGestures);
+    CHECK(f.config.controls[0].play.padMagicGestures);
+    CHECK(f.config.controls[0].customized);
+    // A profile keeps its own gestures through a settings file.
+    GameConfig restored;
+    restored.mergeJson(f.config.toJson());
+    CHECK(restored.controls[0].play.keyboardMagicGestures);
+    CHECK_FALSE(restored.controls[1].play.keyboardMagicGestures);
 }
 
 TEST_CASE("disabling another player's device stays pending and old navigation survives Apply",
@@ -1401,6 +1481,142 @@ TEST_CASE("multiplayer radio choices use retail labels and persist only successf
     CHECK(f.menu.menu().selection() == 2);
     checkLabels();
 }
+
+TEST_CASE("the Video page offers the renderer from the title, needing a restart, and greys "
+          "the scene effects OpenGL does not offer",
+          "[settings][graphics][renderer]") {
+    // The renderer choice and its notice are the user-requested PC feature, not retail text.
+    Fixture f;
+    std::vector<BitmapGlyph> glyphs;
+    for (s32 c = ' '; c <= '~'; ++c) {
+        glyphs.push_back({c, 8, 0, 0});
+    }
+    f.font = BitmapFont::fromGlyphs(32, 8, std::move(glyphs));
+    f.painter.setFont(&f.font, &f.texture);
+    f.choose(4);
+    const auto& items = f.menu.menu().definition().items;
+    REQUIRE(items.size() == 14);
+    CHECK(items[0].code == 14);
+    CHECK(items[0].text == "Renderer");
+    CHECK(items[0].value == "Vulkan");
+    CHECK(items[0].enabled);
+    CHECK(items[7].text == "Depth of Field");
+    CHECK(items[7].enabled);
+    CHECK(items[8].enabled);
+    CHECK(items[9].enabled);
+    CHECK_FALSE(f.menu.restartNeeded());
+    const auto noticeDrawn = [&] {
+        test::FakeRenderDevice device;
+        Canvas canvas;
+        canvas.begin(device, Mat4{1});
+        f.menu.draw(canvas, f.painter, {});
+        canvas.end();
+        return std::ranges::any_of(device.draws, [](const auto& draw) {
+            return std::ranges::any_of(draw.vertices,
+                                       [](const auto& vertex) { return vertex.position.y >= 340; });
+        });
+    };
+    CHECK_FALSE(noticeDrawn());
+    f.right();
+    CHECK(f.menu.config().display.renderer == GraphicsApi::OpenGl);
+    CHECK(items[0].value == "OpenGL");
+    CHECK(f.menu.restartNeeded());
+    CHECK(noticeDrawn()); // the choice takes effect at the next start, and says so
+    // Scene post-processing is Vulkan's alone: those rows are greyed and skipped.
+    CHECK_FALSE(items[7].enabled);
+    CHECK_FALSE(items[8].enabled);
+    CHECK_FALSE(items[9].enabled);
+    for (s32 i = 0; i < 4; ++i) {
+        f.down();
+    }
+    CHECK(f.menu.menu().selection() == 10); // Texture Filtering, past the greyed three
+    MenuInput left;
+    left.left = true;
+    f.focus(14);
+    f.menu.update(left, 1);
+    CHECK(f.menu.config().display.renderer == GraphicsApi::Vulkan);
+    CHECK(items[7].enabled);
+    CHECK_FALSE(f.menu.restartNeeded());
+    CHECK(f.writes == 0); // staged until Apply, like every Video row
+    // Restore Defaults returns to Vulkan.
+    f.right();
+    REQUIRE(f.menu.config().display.renderer == GraphicsApi::OpenGl);
+    f.focus(6);
+    f.select();
+    CHECK(f.menu.config().display.renderer == GraphicsApi::Vulkan);
+    // Running on OpenGL, the saved choice shows as it is, with no restart needed.
+    f.config.display.renderer = GraphicsApi::OpenGl;
+    f.menu.open(f.config, &f.strings, {}, f.painter, {}, {}, SettingsMenu::Scope::Title, {}, {}, {},
+                {}, {}, GraphicsApi::OpenGl);
+    f.choose(4);
+    CHECK(f.menu.menu().definition().items[0].value == "OpenGL");
+    CHECK_FALSE(f.menu.menu().definition().items[7].enabled);
+    CHECK_FALSE(f.menu.restartNeeded());
+    CHECK_FALSE(noticeDrawn());
+    // In play, the renderer cannot be swapped under the level: the row is greyed, skipped,
+    // and left alone by Restore Defaults.
+    for (const auto scope : {SettingsMenu::Scope::Tower, SettingsMenu::Scope::Level}) {
+        f.menu.open(f.config, &f.strings, {}, f.painter, {}, {}, scope, {}, {}, {}, {}, {},
+                    GraphicsApi::OpenGl);
+        f.choose(4);
+        const auto& rows = f.menu.menu().definition().items;
+        CHECK(rows[0].text == "Renderer");
+        CHECK_FALSE(rows[0].enabled);
+        CHECK(f.menu.menu().selection() == 1);
+        f.focus(14);
+        f.right();
+        CHECK(f.menu.config().display.renderer == GraphicsApi::OpenGl);
+        f.focus(6);
+        f.select();
+        CHECK(f.menu.config().display.renderer == GraphicsApi::OpenGl);
+        f.back();
+        f.back();
+    }
+}
+
+TEST_CASE("the Video page offers the display when more than one is attached",
+          "[settings][graphics][display]") {
+    Fixture f;
+    const DisplayOptions display{{1920, 1080}, {{1920, 1080}}, {1280, 896}, {"Left", "Right"}, 1};
+    f.menu.open(
+        f.config, &f.strings,
+        [&](const auto& next) {
+            f.config = next;
+            ++f.writes;
+            return true;
+        },
+        f.painter, {}, {}, SettingsMenu::Scope::Title, {}, display, {},
+        [&](const auto&) { return true; });
+    f.choose(4);
+    REQUIRE(f.menu.page() == SettingsMenu::Page::Graphics);
+    const auto& items = f.menu.menu().definition().items;
+    const auto row = std::ranges::find(items, 13, &MenuItem::code);
+    REQUIRE(row != items.end());
+    CHECK(row->text == "Display");
+    CHECK(row->enabled);
+    CHECK(row->value == "2"); // the window is on the second, nothing chosen yet
+    CHECK(f.menu.config().display.monitor == -1);
+    f.focus(13);
+    f.right();
+    CHECK(f.menu.config().display.monitor == 0);
+    CHECK(std::ranges::find(items, 13, &MenuItem::code)->value == "1");
+    f.right();
+    CHECK(f.menu.config().display.monitor == 1);
+    MenuInput left;
+    left.left = true;
+    f.menu.update(left, 1);
+    f.menu.update(left, 1);
+    CHECK(f.menu.config().display.monitor == 1); // wrapped round the two
+    // One display alone offers no choice: the row is greyed and skipped.
+    Fixture single;
+    single.choose(4);
+    const auto& alone = single.menu.menu().definition().items;
+    const auto greyed = std::ranges::find(alone, 13, &MenuItem::code);
+    REQUIRE(greyed != alone.end());
+    CHECK_FALSE(greyed->enabled);
+    CHECK(greyed->value == "1");
+}
+
 } // namespace
 TEST_CASE("each player's rumble preference is staged applied and reset independently",
           "[settings][controls][rumble]") {
@@ -1515,7 +1731,7 @@ TEST_CASE("rumble hardware changes preserve draft preferences and action bar foc
     update();
     CHECK_FALSE(shown());
     CHECK(selectedCode() == 100); // The removed toggle falls back to the device selector.
-    for (const s32 code : {101, 104, 102, 103}) {
+    for (const s32 code : {104, 102}) {
         f.focus(code);
         pad.rumbleSupported = true;
         physical.setPad(player, pad);
@@ -1545,18 +1761,22 @@ TEST_CASE("the list of players in Controls reads at the choice pages' size",
     f.menu.menu().focus(4);
     f.select();
     REQUIRE(f.menu.page() == SettingsMenu::Page::Controls);
+    // The players stand as the root's choices do: full size, centred on the screen.
     const auto& definition = f.menu.menu().definition();
-    CHECK(definition.scale == SettingsRows::kChoiceScale);
-    CHECK(definition.cursorScale == SettingsRows::kChoiceScale);
-    CHECK(definition.x == SettingsRows::kColumnX);
-    CHECK(definition.y == SettingsRows::kColumnY);
+    CHECK(definition.scale == 1.0f);
+    CHECK(definition.cursorScale == 1.0f);
+    CHECK(definition.x == -256);
+    CHECK(definition.y == -1);
     CHECK(definition.itemPositions.empty());
     CHECK(definition.items.front().text == "Player 1");
-    CHECK(definition.items.back().text == "Back");
+    CHECK(definition.items.back().text == "Player 4");
     f.select();
-    // A player's bindings keep their small rows and their own value column.
+    // A player's bindings keep their small rows, their own value column and a window of a
+    // few rows over the Apply and Restore Defaults row.
     CHECK(definition.scale < SettingsRows::kChoiceScale);
-    CHECK(definition.itemPositions.size() == definition.items.size());
+    CHECK(definition.itemPositions.empty());
+    CHECK(definition.visibleRows == ControlSettings::kVisibleRows);
+    CHECK(definition.tailPositions.size() == 2);
     CHECK(definition.items.front().value == "Automatic");
 }
 

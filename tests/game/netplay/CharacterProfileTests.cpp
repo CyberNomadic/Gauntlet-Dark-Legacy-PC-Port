@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <array>
+#include <format>
 #include <limits>
 
 #include <catch2/catch_test_macros.hpp>
@@ -6,6 +8,7 @@
 #include "engine/net/PacketTransport.h"
 
 #include "game/netplay/CharacterProfile.h"
+#include "game/rollback/PartyCheckpoint.h"
 
 namespace {
 using namespace gdl;
@@ -46,6 +49,10 @@ CharacterSave character() {
     p.levels.legendLevels = {65535, 32768};
     p.levels.bossDeaths = {123, 64};
     p.lifetime = {10000, 200, 123456, 36000.125, 57};
+    p.legendsProgress(LegendsPlatform::N64) = {
+        0x8000000000000001ULL, 2, 4, 8, {"castle6", "mount1", "town4"}};
+    p.legendsProgress(LegendsPlatform::Dreamcast) = {
+        16, 32, 64, 0xfedcba9876543210ULL, {"levela1", "levels6"}};
     return save;
 }
 TEST_CASE("network character profiles preserve selected progress without exporting local saves",
@@ -55,7 +62,8 @@ TEST_CASE("network character profiles preserve selected progress without exporti
     REQUIRE(profile);
     const auto packet = CharacterProfilePacket::encode(*profile);
     REQUIRE(packet);
-    CHECK(packet->size() == CharacterProfilePacket::kBytes);
+    CHECK(packet->size() > CharacterProfilePacket::kMinBytes);
+    CHECK(packet->size() <= CharacterProfilePacket::kMaxBytes);
     CHECK(packet->size() + 8 < PacketTransport::kMaxPacketBytes);
     const auto decoded = CharacterProfilePacket::decode(*packet);
     REQUIRE(decoded);
@@ -142,6 +150,125 @@ TEST_CASE("local character selection validates indices floats counters and item 
     SECTION("unknown ceremony") {
         save.progress().relics.pendingCeremonies = 32;
     }
+    SECTION("noncanonical Legends map") {
+        save.progress().legends[0].completedMaps = {"Town4"};
+    }
+    SECTION("duplicate Legends map") {
+        save.progress().legends[1].completedMaps = {"levela1", "levela1"};
+    }
     CHECK_FALSE(CharacterProfile::capture(save));
+}
+
+TEST_CASE("full native Legends completion rosters fit a reliable travel profile losslessly",
+          "[netplay][character-profile][legends]") {
+    // The 34 N64 and 41 Dreamcast nonempty native worlds, including secret/hub maps.
+    constexpr std::array n64{"battle1", "battle2", "battle3", "boss1",   "boss2",  "castle1",
+                             "castle3", "castle4", "castle5", "castle6", "hell1",  "hell2",
+                             "ice1",    "ice2",    "ice3",    "ice4",    "ice5",   "mount1",
+                             "mount2",  "mount3",  "mount4",  "mount5",  "mount6", "secret2",
+                             "secret3", "secret4", "secret5", "secret6", "tower2", "town1",
+                             "town2",   "town3",   "town4",   "town5"};
+    constexpr std::array dreamcast{"levela1", "levela2", "levela3", "levela4", "levela5", "levela6",
+                                   "levelb1", "levelb2", "levelb3", "levelb4", "levelb5", "levelb6",
+                                   "levelc1", "levelc2", "levelc3", "levelc4", "levelc5", "leveld1",
+                                   "leveld2", "leveld3", "leveld4", "leveld5", "levele1", "levele2",
+                                   "levelf1", "levelf2", "levelg1", "levelg4", "levelh1", "levelh2",
+                                   "levelh3", "levelh4", "levelh5", "levelh6", "levels1", "levels2",
+                                   "levels3", "levels4", "levels5", "levels6", "levelt1"};
+    static_assert(n64.size() == 34 && dreamcast.size() == 41);
+    auto profile = *CharacterProfile::capture(character());
+    profile.progress.legends[0].completedMaps.clear();
+    profile.progress.legends[1].completedMaps.clear();
+    for (const auto map : n64) {
+        REQUIRE(profile.progress.legends[0].recordCompleted(map));
+    }
+    for (const auto map : dreamcast) {
+        REQUIRE(profile.progress.legends[1].recordCompleted(map));
+    }
+    const auto packet = CharacterProfilePacket::encode(profile);
+    REQUIRE(packet);
+    CHECK(packet->size() <= CharacterProfilePacket::kMaxBytes);
+    const auto decoded = CharacterProfilePacket::decode(*packet);
+    REQUIRE(decoded);
+    CHECK(decoded->progress.legends == profile.progress.legends);
+    CHECK(CharacterProfilePacket::encode(*decoded) == packet);
+    const auto travel = PartyCheckpointPacket::encode({1, 0, profile});
+    REQUIRE(travel);
+    CHECK(travel->size() <= PacketTransport::kMaxPacketBytes);
+    const auto arrived = PartyCheckpointPacket::decode(*travel);
+    REQUIRE(arrived);
+    CHECK(arrived->profile.progress.legends == profile.progress.legends);
+}
+
+TEST_CASE("Legends profile compression rejects malformed and noncanonical map lists",
+          "[netplay][character-profile][legends]") {
+    auto profile = *CharacterProfile::capture(character());
+    profile.progress.legends = {};
+    profile.progress.legends[0].completedMaps = {"town1", "town2"};
+    const auto packet = CharacterProfilePacket::encode(profile);
+    REQUIRE(packet);
+    constexpr usize count = CharacterProfilePacket::kBaseBytes + 32;
+    constexpr usize first = count + 4;
+    constexpr usize second = first + 7;
+    REQUIRE((*packet)[count] == 2);
+    REQUIRE((*packet)[first] == 0);
+    REQUIRE((*packet)[first + 1] == 5);
+    REQUIRE((*packet)[second] == 4);
+    REQUIRE((*packet)[second + 1] == 1);
+    auto bad = *packet;
+    SECTION("old protocol version") {
+        bad[4] = 1;
+    }
+    SECTION("oversized completion count") {
+        bad[count] = 129;
+    }
+    SECTION("first name cannot refer to a previous prefix") {
+        bad[first] = 1;
+    }
+    SECTION("suffix cannot be empty") {
+        bad[second + 1] = 0;
+    }
+    SECTION("suffix cannot exceed the map name bound") {
+        bad[second + 1] = 33;
+    }
+    SECTION("names must be lowercase canonical asset identities") {
+        bad[first + 2] = 'T';
+    }
+    SECTION("path syntax is rejected") {
+        bad[first + 2] = '/';
+    }
+    SECTION("duplicate map cannot bypass canonical prefix compression") {
+        bad[second + 2] = '1';
+    }
+    SECTION("maps must be sorted") {
+        bad[second + 2] = '0';
+    }
+    SECTION("alternate equivalent prefix encodings are rejected") {
+        bad[second] = 3;
+        bad[second + 1] = 2;
+        bad.insert(bad.begin() + static_cast<std::ptrdiff_t>(second + 2), 'n');
+    }
+    SECTION("oversized aggregate packet") {
+        bad.resize(CharacterProfilePacket::kMaxBytes + 1);
+    }
+    CHECK_FALSE(CharacterProfilePacket::decode(bad));
+}
+
+TEST_CASE("oversized custom Legends histories fail transport without losing saved progress",
+          "[netplay][character-profile][legends]") {
+    auto save = character();
+    save.progress().legends[0].completedMaps.clear();
+    for (usize i = 0; i < LegendsProgress::kMaxCompletedMaps; ++i) {
+        REQUIRE(save.progress().legends[0].recordCompleted(
+            std::format("{:04}{}", i, std::string(28, 'x'))));
+    }
+    const auto preserved = save.toJson();
+    const auto profile = CharacterProfile::capture(save);
+    REQUIRE(profile);
+    REQUIRE(profile->valid());
+    CHECK_FALSE(CharacterProfilePacket::encode(*profile));
+    CHECK_FALSE(PartyCheckpointPacket::encode({1, 0, *profile}));
+    CHECK(save.toJson() == preserved);
+    CHECK(CharacterSave::fromJson(preserved).progress().legends == save.progress().legends);
 }
 } // namespace

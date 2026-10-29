@@ -1,4 +1,5 @@
 #include <array>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -78,6 +79,30 @@ TEST_CASE("text files read back as strings", "[io][file]") {
     writeTextFile(dir / "note.txt", "hello\nworld");
     REQUIRE(readTextFile(dir / "note.txt") == "hello\nworld");
     REQUIRE_THROWS_AS(readTextFile(dir / "missing.txt"), FileError);
+}
+
+TEST_CASE("files under a name beyond the system code page read, write and report",
+          "[io][file][unicode]") {
+    const auto dir = test::scratchDirectory("file-unicode") /
+                     std::filesystem::path(u8"s\u00E4v\u00E9-\u65E5\u672C");
+    std::filesystem::create_directories(dir);
+    const std::vector<u8> payload{7, 8, 9};
+    writeFile(dir / "data.bin", payload);
+    CHECK(readFile(dir / "data.bin") == payload);
+    writeTextFile(dir / "text.txt", "one");
+    replaceTextFile(dir / "text.txt", "two");
+    CHECK(readTextFile(dir / "text.txt") == "two");
+    const FileStream stream(dir / "data.bin");
+    CHECK(stream.size() == 3);
+    // A missing file is named in UTF-8 by the error, never a code page complaint.
+    try {
+        readFile(dir / "missing.bin");
+        FAIL("a missing file must throw");
+    } catch (const FileError& error) {
+        const std::string_view what{error.what()};
+        CHECK(what.find("s\xC3\xA4v\xC3\xA9") != std::string_view::npos);
+        CHECK(what.find("missing.bin") != std::string_view::npos);
+    }
 }
 
 } // namespace

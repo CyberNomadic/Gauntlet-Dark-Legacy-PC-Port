@@ -388,6 +388,64 @@ TEST_CASE("pad magic distinguishes a tap, hold and double tap without spending t
     }
 }
 
+TEST_CASE("keyboard magic distinguishes a tap, hold and double tap once its gestures are on",
+          "[game][players][controls][keyboard-gestures]") {
+    Input input;
+    PlayBindings bindings;
+    bindings.usePotion = {Key::E};
+    bindings.keyboardMagicGestures = true;
+    PlayerControlReader reader;
+    const auto step = [&](bool magic, f32 seconds = 0.05f) {
+        input.beginPoll();
+        input.setKey(Key::E, magic);
+        return reader.read(input, bindings, true, kNoPad, seconds);
+    };
+    REQUIRE_FALSE(step(true).usePotion);
+    SECTION("tap waits for the double-tap window, then casts once") {
+        bindings.magicDoubleTapSeconds = 0.4f;
+        REQUIRE_FALSE(step(false).usePotion);
+        REQUIRE_FALSE(step(false, 0.3f).usePotion);
+        REQUIRE(step(false, 0.11f).usePotion);
+        REQUIRE_FALSE(step(false).usePotion);
+    }
+    SECTION("hold throws once") {
+        bindings.magicHoldSeconds = 0.4f;
+        REQUIRE_FALSE(step(true, 0.3f).throwPotion);
+        const auto buttons = step(true, 0.11f);
+        REQUIRE(buttons.throwPotion);
+        REQUIRE_FALSE(buttons.usePotion);
+        REQUIRE_FALSE(step(false).throwPotion);
+        REQUIRE_FALSE(step(false, 1.0f).usePotion);
+    }
+    SECTION("a second press shields") {
+        REQUIRE_FALSE(step(false).usePotion);
+        const auto buttons = step(true);
+        REQUIRE(buttons.shieldPotion);
+        REQUIRE_FALSE(buttons.usePotion);
+        REQUIRE_FALSE(step(false).shieldPotion);
+    }
+    SECTION("the throw and shield keys still act at once") {
+        input.beginPoll();
+        input.setKey(Key::Q, true);
+        const auto buttons = reader.read(input, bindings, true, kNoPad, 0.05f);
+        REQUIRE(buttons.throwPotion);
+        REQUIRE_FALSE(buttons.usePotion);
+    }
+    SECTION("off, the key casts the moment it is pressed") {
+        bindings.keyboardMagicGestures = false;
+        REQUIRE(step(true).usePotion);
+    }
+    SECTION("a pad player's keyboard flag means nothing to the pad") {
+        PadSnapshot pad;
+        pad.connected = true;
+        input.beginPoll();
+        pad.buttons[static_cast<usize>(bindings.padUsePotion.front())] = true;
+        input.setPad(0, pad);
+        bindings.padMagicGestures = false;
+        REQUIRE(reader.read(input, bindings, false, 0, 0.05f).usePotion);
+    }
+}
+
 TEST_CASE("four players retain independent magic gestures when one controller disconnects",
           "[game][players][controls][multiplayer]") {
     Input input;

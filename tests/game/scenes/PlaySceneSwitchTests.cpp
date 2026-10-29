@@ -605,4 +605,115 @@ TEST_CASE("Fields bridge camera reveals its placed general without advancing com
     CHECK(heldFrames > 1);
     CHECK_FALSE(scene.switchCutscene().active());
 }
+
+TEST_CASE("the developer console presses Ice Camp's runestone switch, camera shot and all",
+          "[switch-camera][ice-runestone][dev-console][assets]") {
+    const auto root = test::assetOrSkip("WDATA/ICE.WAD").parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("I2")));
+    const GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.unpackedRoot = root;
+    context.levels = &catalog;
+    PlayOptions options;
+    options.welcome = false;
+    options.position = Vec3{-12, 26.3f, -28.375f};
+    const std::array party{PartyMember{0, CharacterSave{}}};
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    scene.enemies().close();
+    scene.generators().clear();
+    for (s32 frame = 0; frame < 600 && scene.spawning(); ++frame) {
+        scene.update(1.0 / 60, {});
+    }
+    REQUIRE_FALSE(scene.spawning());
+    const LevelTriggers& triggers = world.triggers();
+    usize runestone = triggers.size();
+    for (usize i = 0; i < triggers.size(); ++i) {
+        if (triggers.trigger(i).target == 248 && !triggers.trigger(i).chained) {
+            runestone = i;
+            break;
+        }
+    }
+    REQUIRE(runestone < triggers.size());
+    REQUIRE_FALSE(scene.switchCutscene().active());
+    REQUIRE_FALSE(triggers.opened(248));
+    CHECK_FALSE(scene.pressSwitch(triggers.size())); // no such switch
+    REQUIRE(scene.pressSwitch(runestone));
+    bool sawShot = false;
+    for (s32 frame = 0; frame < 600; ++frame) {
+        scene.update(1.0 / 60, {});
+        if (scene.switchCutscene().showing() && scene.switchCutscene().target() == 248) {
+            sawShot = true;
+        }
+        if (sawShot && !scene.switchCutscene().active()) {
+            break;
+        }
+    }
+    CHECK(sawShot);
+    CHECK(triggers.opened(248));
+    // The pad is a thing the console can name and select.
+    const auto token = SceneSelection{SceneSelection::Kind::Switch, static_cast<s32>(runestone)};
+    CHECK(token.token() == std::format("switch#{}", runestone));
+    CHECK(SceneSelection::parse("SWITCH#2")->kind == SceneSelection::Kind::Switch);
+    CHECK(SceneSelection::parse("gate#0")->kind == SceneSelection::Kind::Gate);
+    CHECK(SceneSelection::parse("chest#4")->id == 4);
+}
+
+TEST_CASE("the developer console opens a gate without a key and shuts it again",
+          "[dev-console][gates][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELG1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    LevelCatalog catalog;
+    REQUIRE(catalog.load(root));
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root, *catalog.byName("G1")));
+    const GameConfig config;
+    GameContext context;
+    context.config = &config;
+    context.unpackedRoot = root;
+    context.levels = &catalog;
+    PlayOptions options;
+    options.welcome = false;
+    const std::array party{PartyMember{0, CharacterSave{}}};
+    PlayScene scene;
+    REQUIRE(scene.open(device, context, world, party, options));
+    REQUIRE(scene.gates().size() >= 1);
+    usize shut = scene.gates().size();
+    for (usize i = 0; i < scene.gates().size(); ++i) {
+        if (scene.gates().gate(i).shown && scene.gates().gate(i).state == LockedGates::kShut) {
+            shut = i;
+            break;
+        }
+    }
+    REQUIRE(shut < scene.gates().size());
+    REQUIRE(scene.unlockGate(shut));
+    CHECK(scene.gates().gate(shut).state == LockedGates::kOpening);
+    CHECK_FALSE(scene.gates().gate(shut).box.solid);
+    CHECK_FALSE(scene.unlockGate(shut)); // open already
+    REQUIRE(scene.lockGate(shut));
+    CHECK(scene.gates().gate(shut).state == LockedGates::kShut);
+    CHECK(scene.gates().gate(shut).box.solid == scene.gates().gate(shut).blocksPassage);
+    CHECK_FALSE(scene.lockGate(shut)); // shut already
+    CHECK_FALSE(scene.unlockGate(scene.gates().size()));
+    REQUIRE(scene.chests().size() >= 1);
+    usize chest = scene.chests().size();
+    for (usize i = 0; i < scene.chests().size(); ++i) {
+        if (scene.chests().chest(i).shown && scene.chests().chest(i).locked) {
+            chest = i;
+            break;
+        }
+    }
+    REQUIRE(chest < scene.chests().size());
+    REQUIRE(scene.setChestLocked(chest, false));
+    CHECK_FALSE(scene.chests().chest(chest).locked);
+    REQUIRE(scene.setChestLocked(chest, true));
+    CHECK(scene.chests().chest(chest).locked);
+}
+
 } // namespace

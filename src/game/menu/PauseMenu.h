@@ -16,7 +16,16 @@
 #include "game/scenes/GameContext.h"
 
 namespace gdl::game {
-enum class PauseOutcome : u8 { Running, Resume, Manage, Title, ReturnTower, Shop, Inventory };
+enum class PauseOutcome : u8 {
+    Running,
+    Resume,
+    Manage,
+    Title,
+    ReturnTower,
+    Shop,
+    Inventory,
+    Desktop ///< the player, asked, quits the game to the desktop
+};
 
 /** A paused party's menu. File operations never mutate a running scene directly. */
 class PauseMenu {
@@ -41,9 +50,13 @@ public:
     bool arrowBound() const { return m_arrow.bound(); }
 
 private:
-    enum class Page : u8 { Main, Options, Quit };
+    /** Quit Game on the tower's main page leads to QuitGame, the choice between the main
+     * menu and the desktop, each taken at once. A level's Quit Level asks on QuitLevel, the
+     * retail Abort Level dialog, before the party returns to the tower. */
+    enum class Page : u8 { Main, Options, QuitLevel, QuitGame };
     void showMain();
-    void showQuit();
+    void showQuitLevel();
+    void showQuitGame();
     void loadDecorations(RenderDevice& device);
     void loadFireFrames(RenderDevice& device);
     PauseOutcome dismiss(PauseOutcome outcome);

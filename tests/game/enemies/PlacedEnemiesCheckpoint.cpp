@@ -111,7 +111,10 @@ PlacedEnemiesCheckpoint::capture(const PlacedEnemies& owner) {
     if (!owner.m_bound || owner.m_roster.size() > State::kMaxPlacements) {
         return std::nullopt;
     }
-    State result{owner.m_roster, owner.m_sim.pending, owner.m_sim.view, owner.m_sim.attention};
+    // The live views are a set; the legacy state keeps the first view and its point.
+    State result{owner.m_roster, owner.m_sim.pending,
+                 owner.m_sim.view ? std::optional{owner.m_sim.view->eyes[0]} : std::nullopt,
+                 owner.m_sim.view ? owner.m_sim.view->attentions[0] : Vec3{0}};
     return result.valid() ? std::optional{std::move(result)} : std::nullopt;
 }
 
@@ -134,7 +137,9 @@ PlacedEnemiesCheckpoint::prepareRestore(const PlacedEnemies& owner, const State&
     auto data = std::make_unique<Prepared::Data>();
     owner.saveLocal(data->baseline);
     owner.saveLocal(data->target);
-    data->target.m_values = {state.pending, state.view, state.attention};
+    data->target.m_values = {
+        state.pending,
+        state.view ? std::optional{ViewSet::of(*state.view, state.attention)} : std::nullopt};
     return Prepared{std::move(data)};
 }
 

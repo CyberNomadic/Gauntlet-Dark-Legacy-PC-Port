@@ -50,7 +50,8 @@ PlayButtons readPlayButtons(const Input& input, const PlayBindings& bindings, bo
                             s32 pad);
 
 /** Stateful console magic gestures. One reader per player; no shared input history.
- * Pad magic is tap/use, hold/throw, double-tap/shield. Keyboard shortcuts remain immediate.
+ * Pad magic is tap/use, hold/throw, double-tap/shield, and the keyboard's potion key does
+ * the same when its gestures are on; otherwise keyboard shortcuts remain immediate.
  * Call once per input poll with elapsed seconds. Reset when changing gameplay input context. */
 class PlayerControlReader {
 public:
@@ -67,6 +68,7 @@ private:
                    const PlayBindings& bindings);
     };
     std::array<MagicGesture, Input::kMaxPads> m_magic{};
+    MagicGesture m_keyboardMagic{};
 };
 
 /** Whether the player holds their attack: a bound key (when `keyboard`) or pad button. */

@@ -79,7 +79,7 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
             }
         }
         m_online->update(m_select.isOpen() || consoleOpen ? SessionInputs::Frame{}
-                                                         : readPlayInputs(deltaSeconds),
+                                                          : readPlayInputs(deltaSeconds),
                          {});
         // A permission revocation can arrive during this update. Do not keep a guest
         // console (or its input capture) open for an additional rendered frame.
@@ -97,7 +97,14 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
             return;
         }
         if (!m_online->playing() && ui.view.page != Page::Leave) {
+            // The lobby is read afresh each time; the rules page stays up over it.
+            const Page shown = ui.view.page;
             ui.view = m_online->lobby();
+            if (shown == Page::Settings &&
+                (ui.view.page == Page::Host || ui.view.page == Page::Guest)) {
+                ui.previous = ui.view.page;
+                ui.view.page = Page::Settings;
+            }
             ui.overlay = true;
         } else if (ui.view.page == Page::Host || ui.view.page == Page::Guest) {
             ui.overlay = false;
@@ -173,9 +180,16 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
             m_online->start();
         }
         break;
+    case Action::GameSettings:
+        ui.previous = ui.view.page;
+        ui.view.page = Page::Settings;
+        ui.notice.clear();
+        break;
     case Action::Capacity:
     case Action::Difficulty:
-    case Action::FriendlyFire: {
+    case Action::FriendlyFire:
+    case Action::Camera:
+    case Action::Aggressor: {
         auto rules = ui.view.settings;
         if (event.action == Action::Capacity) {
             rules.maxPlayers = cycle(rules.maxPlayers, 4, 1);
@@ -186,10 +200,21 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
         if (event.action == Action::FriendlyFire) {
             rules.friendlyFire = cycle(rules.friendlyFire, 3);
         }
+        if (event.action == Action::Camera) {
+            rules.camera = cycle(rules.camera, 2);
+        }
+        if (event.action == Action::Aggressor) {
+            rules.aggressor = cycle(rules.aggressor, 2);
+        }
         if (m_online && !m_online->settings(rules)) {
             ui.notice = "The player limit cannot be lower than the joined party.";
         } else {
             ui.notice = "Room settings changed. Everyone must ready again.";
+            if (event.action == Action::Camera) {
+                // The camera rule is kept for the next room hosted.
+                m_config.multiplayer.soloCamera = rules.camera == 1;
+                saveSettings(m_config);
+            }
         }
         break;
     }
@@ -227,7 +252,7 @@ void Gauntlet::updateNetplay(f64 deltaSeconds) {
             }
             ui.overlay = false;
             resetPlayInput();
-        } else if (ui.view.page == Page::Leave) {
+        } else if (ui.view.page == Page::Leave || ui.view.page == Page::Settings) {
             ui.view.page = ui.previous;
             ui.notice.clear();
         } else if (ui.view.page == Page::Join) {

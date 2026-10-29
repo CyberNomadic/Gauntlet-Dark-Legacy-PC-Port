@@ -9,8 +9,9 @@ namespace gdl::game {
 
 namespace {
 
-constexpr std::array<std::string_view, 7> kKindNames{"object", "enemy",  "critter", "generator",
-                                                     "pickup", "player", "spawned"};
+constexpr std::array<std::string_view, 10> kKindNames{
+    "object", "enemy", "critter", "generator", "pickup", "player", "spawned", "switch", "gate",
+    "chest"};
 
 bool sameIgnoringCase(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) {

@@ -23,9 +23,10 @@ public:
     static constexpr usize kHeaderBytes = 40;
     static constexpr usize kSlotBytes = 308;
     static constexpr usize kBodyBytes = 16;
-    static constexpr usize kViewBytes = 64;
-    static constexpr usize kAttentionBytes = 12;
-    static constexpr usize kMaxBytes = kHeaderBytes + kViewBytes + kAttentionBytes +
+    static constexpr usize kEyeBytes = 64 + 12; ///< a view and the point its camera looks at
+    /** The view set: its count, then every one of its four views. */
+    static constexpr usize kViewBytes = 4 + ViewSet::kMost * kEyeBytes;
+    static constexpr usize kMaxBytes = kHeaderBytes + kViewBytes +
                                        2 * kMaxGenerators * kSlotBytes + kMaxBodies * kBodyBytes;
 
     /** Oversized but locally valid pools are refused, never truncated. */

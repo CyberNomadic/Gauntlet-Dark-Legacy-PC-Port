@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <vector>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -93,6 +94,34 @@ TEST_CASE("the story and title movies play through with picture and sound",
     REQUIRE(sawColour);
     REQUIRE_FALSE(audio.empty());
     REQUIRE(std::ranges::max(audio) > 0.1f);
+}
+
+TEST_CASE("a movie's clock starts on its first update and keeps to its sound",
+          "[codec][movie][assets][movie-sync]") {
+    const auto file = test::assetOrSkip("VQMOVIES/midway.avi");
+    MoviePlayback playback;
+    REQUIRE(playback.open(file));
+    // The first update only starts the clock: the time a level took to load is not play.
+    REQUIRE(playback.update(0.5));
+    CHECK(playback.playTime() == 0.0);
+    CHECK(playback.decodedFrames() == 0);
+    // Then it runs on the frame's time: the first frame shows once a frame's time has passed.
+    REQUIRE(playback.update(1.0 / 60.0));
+    CHECK(playback.decodedFrames() == 0);
+    REQUIRE(playback.update(1.0 / 60.0));
+    CHECK(playback.decodedFrames() == 1);
+    // While the sound advances the picture keeps to it, whatever the frame's time says.
+    REQUIRE(playback.update(1.0 / 60.0, 0.5));
+    CHECK(playback.playTime() == Catch::Approx(0.5));
+    REQUIRE(playback.decodedFrames() == 9); // up to eight frames a call catch up
+    // A sound that has not moved on (no device, or finished) leaves the frame's time to run.
+    REQUIRE(playback.update(1.0 / 60.0, 0.5));
+    CHECK(playback.playTime() == Catch::Approx(0.5 + 1.0 / 60.0));
+    // Closing and reopening starts over.
+    playback.close();
+    REQUIRE(playback.open(file));
+    REQUIRE(playback.update(1.0));
+    CHECK(playback.playTime() == 0.0);
 }
 
 } // namespace

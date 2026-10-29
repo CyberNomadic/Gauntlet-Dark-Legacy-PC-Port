@@ -15,6 +15,7 @@
 #include "game/config/GameConfig.h"
 #include "game/menu/MenuInput.h"
 #include "game/scenes/GameContext.h"
+#include "game/menu/MainMenuFactory.h"
 #include "game/scenes/TitleScene.h"
 
 namespace {
@@ -67,9 +68,9 @@ TEST_CASE("title mouse click opens options and right click leaves them",
     scene.step(1, click);
     REQUIRE(scene.menuOpen());
     CHECK_FALSE(scene.optionsOpen());
-    // Start / Options occupy two rows, with Options at y=336.
+    // Start, Options and Quit to Desktop: the factory stands the rows from y=280.
     const auto transform = makeVirtualScreenTransform(projection, 512, 384, 640, 448);
-    const auto clip = transform * Vec4{256, 344, 0.5f, 1};
+    const auto clip = transform * Vec4{256, 328, 0.5f, 1};
     click.pointer = (Vec2{clip} + Vec2{1}) / 2.0f;
     scene.step(1, click);
     REQUIRE(scene.optionsOpen());
@@ -175,6 +176,45 @@ TEST_CASE("Start opens Local and Netplay and Local leads into story mode",
     }
     REQUIRE(outcome == TitleOutcome::StartGame);
     REQUIRE(ticks == TitleScene::kLoadingTicks);
+}
+
+TEST_CASE("Quit to Desktop asks first and quits on Yes", "[game][title][assets]") {
+    test::FakeRenderDevice device;
+    const Fixture f;
+    TitleScene scene;
+    REQUIRE(scene.open(device, f.context(nullptr)));
+    scene.step(1, press(true));
+    REQUIRE(scene.menuOpen());
+    // Three rows: the factory lifts the column so Quit to Desktop ends above the bottom.
+    REQUIRE(scene.titleMenu().definition().items.size() == 3);
+    CHECK(scene.titleMenu().itemY(2) + scene.titleMenu().lineHeight() <=
+          scene.screen().height - MainMenuFactory::kBottomMargin);
+    CHECK(scene.titleMenu().itemY(0) >= MainMenuFactory::kHighestTop);
+    CHECK(scene.titleMenu().definition().items[2].text == "Quit");
+    scene.step(1, press(false, false, true));
+    scene.step(1, press(false, false, true)); // Start, Options, Quit
+    REQUIRE(scene.step(1, press(false, true)) == TitleOutcome::Running);
+    REQUIRE(scene.quitConfirmOpen());
+    REQUIRE_FALSE(scene.startMenuOpen());
+    // The question fits its parchment, as does anything a menu is given to write.
+    CHECK(scene.titleMenu().definition().title == "Are you sure?");
+    CHECK(scene.titleMenu().definition().fitWidth == 320);
+    // No, the default, brings the menu back with Quit to Desktop still under the arrow.
+    REQUIRE(scene.step(1, press(false, true)) == TitleOutcome::Running);
+    REQUIRE(scene.menuOpen());
+    REQUIRE_FALSE(scene.quitConfirmOpen());
+    REQUIRE(scene.step(1, press(false, true)) == TitleOutcome::Running);
+    REQUIRE(scene.quitConfirmOpen());
+    // Backing out does the same.
+    REQUIRE(scene.step(1, press(false, false, false, true)) == TitleOutcome::Running);
+    REQUIRE(scene.menuOpen());
+    REQUIRE_FALSE(scene.quitConfirmOpen());
+    scene.step(1, press(false, true));
+    REQUIRE(scene.quitConfirmOpen());
+    scene.step(1, press(false, false, true));
+    REQUIRE(scene.step(1, press(false, true)) == TitleOutcome::Quit);
+    scene.close();
+    REQUIRE_FALSE(scene.quitConfirmOpen());
 }
 
 TEST_CASE("the options menu opens over the title menu and fades away", "[game][title][assets]") {
@@ -384,7 +424,7 @@ TEST_CASE("mouse follows Start to Local or Netplay and back preserves title navi
     REQUIRE(scene.open(device, context));
     scene.render(device, makeScreenProjection(512, 384), 512, 384);
     MenuInput click;
-    click.pointer = Vec2{256, 312};
+    click.pointer = Vec2{256, 296}; // the first row, the factory's column starting at 280
     click.pointerPressed = true;
     scene.step(1, click); // Press Start
     REQUIRE(scene.menuOpen());

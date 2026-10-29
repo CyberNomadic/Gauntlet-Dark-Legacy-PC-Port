@@ -208,12 +208,12 @@ TEST_CASE("a node's matrix turns in the original's sense and carries its rest of
     pose.rotation = Vec3{0.4f, 0.0f, 0.0f};
     const Mat4 pitched = TreePose::localMatrix(pose, Vec3{0.0f, 0.0f, 0.0f});
     REQUIRE(near(pitched, glm::rotate(Mat4{1.0f}, -0.4f, Vec3{1.0f, 0.0f, 0.0f})));
-    pose.pitchYawRoll = true;
+    pose.rotationOrder = NodePose::RotationOrder::PitchYawRoll;
     REQUIRE(near(TreePose::localMatrix(pose, Vec3{0.0f, 0.0f, 0.0f}), pitched));
     // Both orders agree on a single axis; they differ once two combine.
     pose.rotation = Vec3{0.4f, 0.7f, 0.0f};
     const Mat4 pyr = TreePose::localMatrix(pose, Vec3{0.0f, 0.0f, 0.0f});
-    pose.pitchYawRoll = false;
+    pose.rotationOrder = NodePose::RotationOrder::RollYawPitch;
     const Mat4 ryp = TreePose::localMatrix(pose, Vec3{0.0f, 0.0f, 0.0f});
     REQUIRE_FALSE(near(pyr, ryp));
     REQUIRE(near(pyr, glm::rotate(Mat4{1.0f}, -0.4f, Vec3{1.0f, 0.0f, 0.0f}) *
@@ -228,6 +228,34 @@ TEST_CASE("a node's matrix turns in the original's sense and carries its rest of
     REQUIRE(near(Vec3{placed[3]}, Vec3{11.0f, 2.0f, 3.0f}));
     REQUIRE(near(Vec3{placed[0]}, Vec3{2.0f, 0.0f, 0.0f}));
     REQUIRE(near(Vec3{placed[1]}, Vec3{0.0f, 1.0f, 0.0f}));
+}
+
+TEST_CASE("Legends yaw-pitch-roll is a separate order with continuous native Euler sampling",
+          "[world][pose][legends]") {
+    NodePose pose;
+    pose.rotation = {0.3f, 0.7f, -0.2f};
+    pose.rotationOrder = NodePose::RotationOrder::YawPitchRoll;
+    const Mat4 expected = glm::rotate(Mat4{1}, pose.rotation.y, Vec3{0, 1, 0}) *
+                          glm::rotate(Mat4{1}, -pose.rotation.x, Vec3{1, 0, 0}) *
+                          glm::rotate(Mat4{1}, -pose.rotation.z, Vec3{0, 0, 1});
+    CHECK(near(TreePose::localMatrix(pose, Vec3{0}), expected));
+    auto native = track(0, 0, {0, 1}, {0, 3.0f});
+    native.flags |= TrackInfo::kYawPitchRoll | TrackInfo::kLinearAngles;
+    const auto sampled = TreePose::sample(native, 0.95f);
+    CHECK(sampled.rotationOrder == NodePose::RotationOrder::YawPitchRoll);
+    CHECK(sampled.rotation.x == Approx(2.85f));
+    native.flags &= static_cast<u16>(~TrackInfo::kLinearAngles);
+    CHECK(TreePose::sample(native, 0.5f).rotation.x == 0.0f);
+
+    auto tree = sampleTree();
+    TreePose held;
+    held.rest(tree);
+    held.setNodePose(0, pose);
+    auto state = held.checkpoint();
+    REQUIRE(state);
+    CHECK(state->valid());
+    state->poses[0].rotationOrder = static_cast<NodePose::RotationOrder>(3);
+    CHECK_FALSE(state->valid());
 }
 
 TEST_CASE("a tree pose composes each node with its ancestors, mirrors and blends",
@@ -308,12 +336,12 @@ TEST_CASE("the angles read off a node's rotation are those of the yaw-pitch-roll
     tree.sequences[0].trackOfNode = {0, 1};
     TreePose pose;
     pose.evaluate(tree, 0, 0.0f);
-    REQUIRE_FALSE(pose.poses()[1].pitchYawRoll);
+    REQUIRE(pose.poses()[1].rotationOrder == NodePose::RotationOrder::RollYawPitch);
     const Mat4 before = pose.matrices()[1];
     const Vec3 angles = pose.readAngles(1);
     REQUIRE(near(angles, Vec3{0.0f, 0.7f, 0.0f}));
     pose.setPitchYawRoll(1, angles);
-    REQUIRE(pose.poses()[1].pitchYawRoll);
+    REQUIRE(pose.poses()[1].rotationOrder == NodePose::RotationOrder::PitchYawRoll);
     REQUIRE(near(pose.matrices()[1], before));
     // Turned further about the upright, the node's matrix follows and keeps its place.
     pose.setPitchYawRoll(1, angles + Vec3{0.0f, 0.5f, 0.0f});
@@ -324,7 +352,7 @@ TEST_CASE("the angles read off a node's rotation are those of the yaw-pitch-roll
     // read is the other order's, as the original's is.
     NodePose pitched;
     pitched.rotation = Vec3{0.4f, 0.0f, 0.0f};
-    pitched.pitchYawRoll = true;
+    pitched.rotationOrder = NodePose::RotationOrder::PitchYawRoll;
     REQUIRE(
         near(TreePose::readAngles(TreePose::localMatrix(pitched, Vec3{0.0f})), pitched.rotation));
 }

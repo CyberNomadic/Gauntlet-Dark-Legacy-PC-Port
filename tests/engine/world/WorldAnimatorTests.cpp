@@ -225,21 +225,34 @@ void checkLoopPresentation(Fixture& fixture, bool continuous) {
         REQUIRE(fixture.device.draws.size() >= 4);
         return fixture.device.draws[2].vertices[0].position;
     };
-    for (s32 tick = 0; tick < animation.frames - 1; ++tick) {
+    // The keys play out as authored; a continuous turn then runs on through its seam
+    // (the frames its keys stop short of the full turn) before the cycle closes.
+    const auto last = static_cast<f32>(animation.frames - 1);
+    const auto wrappedYet = [&] {
+        return std::ranges::any_of(fixture.animator.cycleEvents(),
+                                   [](const auto& event) { return event.wrapped; });
+    };
+    s32 ticks = 0;
+    while (!wrappedYet() && ticks < animation.frames + 8) {
         const f32 frame = fixture.animator.frame(0);
         fixture.scene.capturePresentation();
         fixture.animator.step(kStep, fixture.scene);
-        const Mat4 expected = TreePose::localMatrix(TreePose::sample(animation.track, frame),
-                                                    fixture.layout.objects()[object].position);
-        CHECK(fixture.scene.localTransform(object) == expected);
+        ++ticks;
+        if (frame <= last) {
+            const Mat4 expected = TreePose::localMatrix(TreePose::sample(animation.track, frame),
+                                                        fixture.layout.objects()[object].position);
+            CHECK(fixture.scene.localTransform(object) == expected);
+        }
     }
-    REQUIRE(fixture.animator.frame(0) == 0);
+    REQUIRE(ticks >= animation.frames - 1);
+    REQUIRE(fixture.animator.frame(0) < 1);
     REQUIRE(fixture.animator.cycleEvents().size() == 1);
     CHECK(fixture.animator.cycleEvents().front().wrapped);
+    const f32 wrapped = fixture.animator.frame(0);
     const Vec3 previous = draw(1);
     fixture.scene.capturePresentation();
     fixture.animator.step(kStep, fixture.scene);
-    CHECK(fixture.animator.frame(0) == 1);
+    CHECK(fixture.animator.frame(0) == Approx(wrapped + 1));
     const Vec3 current = draw(1);
     REQUIRE(glm::distance(previous, current) > 0.001f);
     if (continuous) {
@@ -283,6 +296,62 @@ TEST_CASE("full-turn world loops interpolate their seam without smoothing author
         }
         checkLoopPresentation(fixture, mode < 2);
     }
+}
+
+TEST_CASE("a continuous turn whose keys stop short of the circle runs on through the seam",
+          "[world][animation][fan-loop]") {
+    // Twelve keys thirty degrees apart over eleven frames: the twelfth step, back to the
+    // first key, is the seam, and the cycle is twelve frames long rather than eleven.
+    Fixture fixture("world-fan-seam");
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): mutable test fixture
+    auto& animation = const_cast<WorldAnimation&>(fixture.layout.animations().front());
+    constexpr s32 kKeys = 12;
+    animation.frames = kKeys;
+    animation.track.flags = 2U;
+    animation.track.frames.clear();
+    animation.track.values.clear();
+    for (u16 frame = 0; frame < kKeys; ++frame) {
+        animation.track.frames.push_back(frame);
+        animation.track.values.push_back(
+            TreePose::wrapAngle(kTwoPi * static_cast<f32>(frame) / static_cast<f32>(kKeys)));
+    }
+    fixture.animator.bind(fixture.layout);
+    // The blade's first vertex swings about the object at (10, 0, 50): its angle is the turn.
+    const auto yawOf = [&] {
+        const Vec3 blade = fixture.bladeAt();
+        return std::atan2(50.0f - blade.z, blade.x - 10.0f);
+    };
+    // A step poses the frame it stands on, then moves on: the first poses frame 0 again.
+    fixture.animator.step(kStep, fixture.scene);
+    f32 previous = yawOf();
+    constexpr f32 kStepAngle = kTwoPi / static_cast<f32>(kKeys);
+    const auto wrapped = [&] {
+        return std::ranges::any_of(fixture.animator.cycleEvents(),
+                                   [](const auto& event) { return event.wrapped; });
+    };
+    // Every tick turns the blade one step, the seam's tick included, and the twelfth
+    // tick is the one that wraps: the spin never jolts and never doubles a step.
+    for (s32 tick = 2; tick <= kKeys * 2 + 1; ++tick) {
+        fixture.animator.step(kStep, fixture.scene);
+        const f32 now = yawOf();
+        CHECK(std::abs(TreePose::wrapAngle(now - previous)) == Approx(kStepAngle).margin(1e-4f));
+        previous = now;
+        CHECK(wrapped() == (tick % kKeys == 0));
+    }
+    CHECK(fixture.animator.frame(0) == Approx(1.0f).margin(1e-4f));
+    // A cursor through the seam is a valid one to restore; one past it, or one claiming
+    // another seam than the track's, is not.
+    auto cursors = fixture.animator.checkpoint();
+    CHECK(cursors[0].seam == Approx(1.0f));
+    cursors[0].frame = static_cast<f32>(kKeys - 1) + 0.5f;
+    CHECK(cursors[0].valid());
+    CHECK(fixture.animator.restore(cursors));
+    cursors[0].frame = static_cast<f32>(kKeys - 1) + 1.5f;
+    CHECK_FALSE(cursors[0].valid());
+    cursors[0].frame = 0.0f;
+    cursors[0].seam = 0.0f;
+    CHECK(cursors[0].valid());
+    CHECK_FALSE(fixture.animator.restore(cursors));
 }
 
 TEST_CASE("native Mothership full-turn fans retain interpolation across their loop seams",

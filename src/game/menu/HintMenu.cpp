@@ -23,7 +23,7 @@ void HintMenu::appendState(NativeStateDigest& digest, const Simulation& state) c
     for (const auto* frame : ring) {
         digest.resource(frame);
     }
-    digest.fields<5>(labels);
+    digest.fields<4>(labels);
     digest.value(screen);
     digest.flag(painter != nullptr);
     if (painter) {
@@ -57,7 +57,6 @@ MenuDefinition scrollDefinition(const HintMenuLabels& labels) {
     menu.y = -1;
     menu.colors.off = HintMenu::kInk;
     menu.prompts = true;
-    menu.backLabel = labels.back;
     menu.promptY = HintMenu::kPromptY;
     menu.fades = true;
     menu.parchmentFont = true;

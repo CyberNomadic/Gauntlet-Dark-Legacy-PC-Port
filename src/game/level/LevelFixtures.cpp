@@ -22,6 +22,7 @@
 #include "game/effects/DynamicLights.h"
 #include "game/enemies/EnemyKinds.h"
 #include "game/hud/HelpMessages.h"
+#include "game/level/ImportedLevel.h"
 #include "game/level/NativeStateResources.h"
 #include "game/party/PlayerPowerups.h"
 #include "game/players/ItemPickup.h"
@@ -294,6 +295,10 @@ std::vector<Obstacle> LevelFixtures::obstacles() const {
                               m_scenery.obstacles()}) {
         result.insert(result.end(), group.begin(), group.end());
     }
+    if (m_resources && m_resources->world.imported()) {
+        const auto native = m_resources->world.imported()->obstacles();
+        result.insert(result.end(), native.begin(), native.end());
+    }
     return result;
 }
 std::vector<Obstacle> LevelFixtures::inertStops() const {
@@ -322,6 +327,16 @@ std::vector<MissileStop> LevelFixtures::missileStops() const {
     }
     for (const Obstacle& box : m_scenery.obstacles()) {
         stops.push_back(MissileStop::of(box));
+    }
+    if (m_resources && m_resources->world.imported()) {
+        const auto arena = m_resources->world.imported()->arenaMissileStops();
+        for (const auto& box : m_resources->world.imported()->obstacles()) {
+            if (std::ranges::none_of(arena,
+                                     [&](const MissileStop& stop) { return stop.box == box; })) {
+                stops.push_back(MissileStop::of(box));
+            }
+        }
+        stops.insert(stops.end(), arena.begin(), arena.end());
     }
     for (usize i = 0; i < m_safeRocks.size(); ++i) {
         if (m_safeRocks.standing(i)) {
@@ -366,6 +381,11 @@ std::vector<CombatantObstacle> LevelFixtures::critterObstacles() const {
         item.kind = kind;
         items.push_back(item);
     };
+    if (m_resources && m_resources->world.imported()) {
+        for (const auto& box : m_resources->world.imported()->obstacles()) {
+            add(box, CombatantObstacle::Kind::Blocks);
+        }
+    }
     for (const Obstacle& box : m_chests.obstacles()) {
         add(box, CombatantObstacle::Kind::Chest);
     }
@@ -663,6 +683,10 @@ LevelFixtures::Phase LevelFixtures::updatePhase(s32 ticks, f32 seconds,
     boxes.insert(boxes.end(), cover.begin(), cover.end());
     const auto scenery = m_scenery.obstacles();
     boxes.insert(boxes.end(), scenery.begin(), scenery.end());
+    if (const auto* imported = m_resources->world.imported()) {
+        const auto native = imported->obstacles();
+        boxes.insert(boxes.end(), native.begin(), native.end());
+    }
     std::vector<ChestVisitor> visitors;
     std::vector<TrapVictim> victims;
     visitors.reserve(players.size());
@@ -1383,6 +1407,18 @@ void LevelFixtures::blastScenery(const Vec3& position, f32 radius, f32 damage, u
             strikeBarrel(barrel, damage, -1, players, events);
         }
     }
+    if (auto* imported = m_resources->world.imported()) {
+        for (const auto& native : imported->targets()) {
+            if (!native.valid() || !native.damageable) {
+                continue;
+            }
+            const s32 id = kImportedTargetBase + native.id;
+            const MissileTarget body{id, native.base, native.radius, native.height};
+            if (body.touches(position, reach) && first(id)) {
+                imported->strike(native.id, damage, flags, -1);
+            }
+        }
+    }
     const auto& walls = m_resources->world.walls();
     for (usize i = 0; i < walls.size(); ++i) {
         if (walls.standing(i) && walls.target(i, 0).touches(position, reach) &&
@@ -1599,6 +1635,19 @@ void LevelFixtures::playGateSound(s32 subtype, const NamedPublisher& publish) {
             m_resources->audio.playNamed(sound, 127.0f / 255.0f);
         }
     }
+}
+
+
+bool LevelFixtures::unlockGate(usize index) {
+    if (!m_gates.unlock(index)) {
+        return false;
+    }
+    playGateSound(m_gates.gate(index).subtype);
+    return true;
+}
+
+bool LevelFixtures::lockGate(usize index) {
+    return m_gates.lock(index);
 }
 
 } // namespace gdl::game

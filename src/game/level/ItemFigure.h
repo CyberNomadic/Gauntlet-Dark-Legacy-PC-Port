@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -128,26 +129,30 @@ public:
 
     /** Stands the figure `name` of `items` (which must outlive it) where `instance` is, on
      * the floor the collision finds; false when the archive has no such figure, in which
-     * case the item still has its place and its obstacle. */
+     * case the item still has its place and its obstacle. Explicit texture lenders
+     * support decoded native archives; they must outlive the figure. An empty list
+     * preserves the ordinary archive-local binding behavior. */
     bool place(RenderDevice& device, ItemArchive& items, std::string_view name,
-               const ItemInstance& instance, const WorldCollision* collision);
+               const ItemInstance& instance, const WorldCollision* collision,
+               std::span<TextureSet* const> lenders = {});
     /** AddItemSub's FloorPos: a radius-one sweep from four above the instance to ten below. */
     static constexpr f32 kFloorReachAbove = 4.0f;
     static constexpr f32 kFloorReachBelow = 10.0f;
     static constexpr f32 kFloorReachRadius = 1.0f;
     /** The same from whichever of the scope's archives holds the tree, in its search order. */
     bool place(RenderDevice& device, const AssetScope& scope, std::string_view name,
-               const ItemInstance& instance, const WorldCollision* collision);
+               const ItemInstance& instance, const WorldCollision* collision,
+               std::span<TextureSet* const> lenders = {});
     /** Scenery may have no animation tree: try its static name with the authored object
      * suffixes across the scope. Ordinary place() callers retain their tree-only contract. */
     bool placeStaticFallback(RenderDevice& device, const AssetScope& scope, std::string_view name,
                              const ItemInstance& instance, const WorldCollision* collision,
-                             u32 objectFlags);
+                             u32 objectFlags, std::span<TextureSet* const> lenders = {});
     bool placeStaticFallback(RenderDevice& device, ItemArchive& items, std::string_view name,
                              const ItemInstance& instance, const WorldCollision* collision,
-                             u32 objectFlags) {
+                             u32 objectFlags, std::span<TextureSet* const> lenders = {}) {
         return placeStaticFallback(device, AssetScope(items), name, instance, collision,
-                                   objectFlags);
+                                   objectFlags, lenders);
     }
 
     /** Starts the figure's sequence number `index`. */
@@ -155,15 +160,25 @@ public:
     void update(f32 seconds);
     /** Captures visual state before a fixed update, including ticks that hold animation. */
     void capturePresentation();
+    /** Per-draw presentation only. Hidden meshes leave child attachments intact;
+     * overrides never become part of the shared artwork or gameplay state. */
+    struct Appearance {
+        Color tint = Color::white();
+        bool unlit = false;
+        std::span<const usize> hiddenMeshes;
+    };
     void draw(RenderDevice& device, const Mat4& clip, const WorldLighting& lighting,
               f32 alpha = 1.0f, f32 scale = 1.0f, const CameraFrame* camera = nullptr,
-              TreeModel::Pass pass = TreeModel::Pass::All, f32 presentationAlpha = -1.0f) const;
+              TreeModel::Pass pass = TreeModel::Pass::All, f32 presentationAlpha = -1.0f,
+              const Appearance* appearance = nullptr) const;
     /** Traps suppress emission in OFF without killing their live particle tails. */
     void gateParticlesOnSequence(bool enabled);
     const TreeParticles& particles() const { return m_sim.particles; }
     const TextureAnimator& textureAnimator() const { return textures(); }
 
     bool hasFigure() const { return m_sim.tree != nullptr; }
+    /** The tree the figure plays, or null for a placement with nothing to show. */
+    const TreeInfo* tree() const { return m_sim.tree; }
     s32 sequence() const { return m_sim.index; }
     /** Whether a sequence played once has reached its end (a missing one has at once). */
     bool finished() const;
@@ -253,6 +268,7 @@ private:
         const TreeInfo* tree = nullptr;
         std::shared_ptr<Resources> resources;
         TreeParticles particles;
+        std::vector<TextureSet*> lenders;
     };
     // Resource bindings survive correction and are bounded by the distinct artwork
     // used by this figure, not by the number of speculative births.

@@ -12,6 +12,7 @@
 #include "engine/audio/StreamPlaylist.h"
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl::game {
 namespace {
@@ -63,9 +64,12 @@ bool LevelSoundscape::appendLocalDigest(NativeStateDigest& digest,
 }
 bool LevelSoundscape::canRestoreLocal(const LocalSnapshot& saved) const {
     return saved.m_owner.lock() == m_lifetime && saved.m_epoch == m_localEpoch &&
-           std::ranges::all_of(saved.m_values.borrowedBanks, [&](const auto& name) {
-               return std::ranges::find(m_borrowed, name, &BorrowedBank::name) != m_borrowed.end();
-           }) &&
+           std::ranges::all_of(saved.m_values.borrowedBanks,
+                               [&](const auto& name) {
+                                   return std::ranges::find(m_borrowed, name,
+                                                            &BorrowedBank::name) !=
+                                          m_borrowed.end();
+                               }) &&
            m_narration.canRestoreLocal(saved.m_narration) && m_barks.canRestoreLocal(saved.m_barks);
 }
 bool LevelSoundscape::restoreLocal(const LocalSnapshot& saved) {
@@ -384,6 +388,9 @@ std::vector<std::unique_ptr<StreamSource>> LevelSoundscape::openArea(s32 area) c
 
 void LevelSoundscape::startMusic(const AssetLocator* assets, f32 volume) {
     requirePresentation("starting a music stream during a native tick");
+    // A resumed scene may have no soundtrack (native imported maps supply their
+    // own). Its gameplay/narration clock still resumes after suspend().
+    m_sim.cuesEnabled = true;
     if (assets == nullptr || m_stream.empty()) {
         return;
     }
@@ -395,7 +402,6 @@ void LevelSoundscape::startMusic(const AssetLocator* assets, f32 volume) {
     m_sim.music.enabled = true;
     m_sim.duck = 0;
     m_sim.duckScale = 1;
-    m_sim.cuesEnabled = true;
     m_sim.music.start = ++m_sim.music.revision;
     applyMusicRequest();
 }
@@ -736,7 +742,7 @@ SoundSet* LevelSoundscape::bankOf(std::string_view name, u32& sound) {
 bool LevelSoundscape::borrowBank(const std::filesystem::path& directory) {
     // Native WDATA bank names are root-relative. Cache disk resources separately
     // from active lookup order so rollback cannot leak a future bank into a tick.
-    const std::string key = directory.filename().generic_string();
+    const std::string key = paths::genericUtf8(directory.filename());
     auto found = std::ranges::find(m_borrowed, key, &BorrowedBank::name);
     if (found == m_borrowed.end()) {
         auto bank = std::make_unique<SoundSet>();

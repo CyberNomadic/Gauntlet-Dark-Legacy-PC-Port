@@ -396,6 +396,33 @@ void PlayerAnimator::evaluatePresentation(TreePose& out, f32 alpha) const {
     }
 }
 
+void PlayerAnimator::advancePresentation(f32 seconds) {
+    if (!bound() || !std::isfinite(seconds) || seconds <= 0) {
+        return;
+    }
+    evaluatePresentation(m_presentationPrevious);
+    m_presentationGeneration = m_player.generation();
+    // Keep the current action's loop policy without applying its continuation
+    // or polling inputs. Native Legends still calls AnimateTree while life5
+    // holds the actor outside its gameplay action dispatcher (e0042614).
+    m_player.advance(seconds, decide(m_current).repeat);
+    m_pose.evaluate(*m_tree, m_player.sequence(), m_player.frame());
+    if (m_player.transitioning()) {
+        m_pose.blend(m_previous, m_player.transition());
+    }
+    m_meleeBlow = MeleeBlow::None;
+    m_footfall = Foot::None;
+    m_released = false;
+    m_strongReleased = false;
+    m_superReleased = false;
+    m_legendReleased = false;
+    m_itemReleased = PlayerDeed::None;
+    m_potionUsed = false;
+    m_potionThrown = false;
+    m_potionShielded = false;
+    m_turboBegan = false;
+}
+
 PlayerAnimator::Action PlayerAnimator::comboHeldActionOf(s32 grabberClass) {
     switch (grabberClass) {
     case 0: return Action::ComboWar1;
@@ -506,7 +533,7 @@ u32 PlayerAnimator::sequenceOf(Action action) const {
 }
 
 void PlayerAnimator::update(PlayerMotion motion, s32 ticks, f32 seconds, PlayerDeed deed,
-                             bool chainHeldMelee) {
+                            bool chainHeldMelee) {
     m_meleeBlow = MeleeBlow::None;
     if (!bound()) {
         return;
@@ -525,8 +552,8 @@ void PlayerAnimator::update(PlayerMotion motion, s32 ticks, f32 seconds, PlayerD
     // The optional automatic-melee mode also carries held close swings through a
     // combo. Manual controls retain the native fresh-press latch, and ranged
     // attacks never advance a melee combo merely because their button is held.
-    const bool continuingMelee = chainHeldMelee &&
-                                 (deed == PlayerDeed::Melee || deed == PlayerDeed::MeleeLow);
+    const bool continuingMelee =
+        chainHeldMelee && (deed == PlayerDeed::Melee || deed == PlayerDeed::MeleeLow);
     m_quickPress = m_quickPress || (quickHeld && !m_quickHeld) || continuingMelee;
     m_strongPress = m_strongPress || (strongHeld && !m_strongHeld);
     m_quickHeld = quickHeld;

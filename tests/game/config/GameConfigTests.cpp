@@ -41,10 +41,13 @@ TEST_CASE("expanded shop and autosave are independent opt-in settings", "[game][
     CHECK(config.game.expandedShop);
     CHECK_FALSE(config.game.autoSave);
     config.mergeJson(R"({"game":{"autoSave":true}})");
+    config.mergeJson(R"({"display":{"monitor":1}})");
     GameConfig restored;
     restored.mergeJson(config.toJson());
     CHECK(restored.game.expandedShop);
     CHECK(restored.game.autoSave);
+    CHECK(restored.display.monitor == 1); // the display chosen is kept with the settings
+    CHECK(GameConfig{}.display.monitor == -1);
     config.mergeJson(R"({"game":{"expandedShop":false,"autoSave":false}})");
     CHECK_FALSE(config.game.expandedShop);
     CHECK_FALSE(config.game.autoSave);
@@ -91,17 +94,17 @@ TEST_CASE("combat is opt-in and movie volume persists independently of other aud
     CHECK(restored.difficulty.level == "hard");
 }
 
-TEST_CASE("Aggressor Mode is on until switched off and survives a round trip",
+TEST_CASE("Aggressor Mode is off until switched on and survives a round trip",
           "[game][config][streak]") {
     GameConfig config;
-    CHECK(config.game.aggressorMode);
-    REQUIRE(config.loadFile(test::dataDirectory() / "config.json"));
-    CHECK(config.game.aggressorMode);
-    config.mergeJson(R"({"game":{"aggressorMode":false}})");
     CHECK_FALSE(config.game.aggressorMode);
+    REQUIRE(config.loadFile(test::dataDirectory() / "config.json"));
+    CHECK_FALSE(config.game.aggressorMode);
+    config.mergeJson(R"({"game":{"aggressorMode":true}})");
+    CHECK(config.game.aggressorMode);
     GameConfig restored;
     restored.mergeJson(config.toJson());
-    CHECK_FALSE(restored.game.aggressorMode);
+    CHECK(restored.game.aggressorMode);
 }
 
 TEST_CASE("video window modes and resolution survive settings round trips",
@@ -232,6 +235,24 @@ TEST_CASE("graphics settings round-trip with thirty fps presentation defaults",
     CHECK(restored.toJson() == config.toJson());
 }
 
+TEST_CASE("the renderer is Vulkan unless the settings say OpenGL, and nothing else",
+          "[game][config][graphics][renderer]") {
+    GameConfig config;
+    CHECK(config.display.renderer == GraphicsApi::Vulkan);
+    CHECK(config.toJson().find("\"renderer\"") != std::string::npos);
+    config.mergeJson(R"({"display": {"renderer": "opengl"}})");
+    CHECK(config.display.renderer == GraphicsApi::OpenGl);
+    GameConfig restored;
+    restored.mergeJson(config.toJson());
+    CHECK(restored.display.renderer == GraphicsApi::OpenGl);
+    CHECK(restored.toJson() == config.toJson());
+    config.mergeJson(R"({"display": {"renderer": "vulkan"}})");
+    CHECK(config.display.renderer == GraphicsApi::Vulkan);
+    CHECK_THROWS_AS(config.mergeJson(R"({"display": {"renderer": "software"}})"), FormatError);
+    CHECK_THROWS_AS(config.mergeJson(R"({"display": {"renderer": 1}})"), FormatError);
+    CHECK(config.display.renderer == GraphicsApi::Vulkan);
+}
+
 TEST_CASE("texture filtering persists and invalid choices fall back to trilinear",
           "[game][config][graphics][mipmaps]") {
     GameConfig config;
@@ -296,6 +317,13 @@ TEST_CASE("GameCube controls and rebindable triggers and gestures round-trip", "
     REQUIRE(roundTrip.play.combo == std::vector<Key>{Key::G});
     REQUIRE_FALSE(roundTrip.play.actionChords);
     REQUIRE_FALSE(roundTrip.play.padMagicGestures);
+    REQUIRE_FALSE(roundTrip.play.keyboardMagicGestures);
+    GameConfig keyboardGestures;
+    keyboardGestures.mergeJson(R"({"controls":{"play":{"keyboardMagicGestures":true}}})");
+    REQUIRE(keyboardGestures.play.keyboardMagicGestures);
+    GameConfig again;
+    again.mergeJson(keyboardGestures.toJson());
+    REQUIRE(again.play.keyboardMagicGestures);
 }
 
 TEST_CASE("the configuration round-trips through JSON files", "[game][config]") {
@@ -346,6 +374,9 @@ TEST_CASE("characters are saved beside the game unless the settings say where", 
     const std::filesystem::path elsewhere = std::filesystem::absolute("elsewhere");
     config.save.directory = elsewhere.string();
     REQUIRE(config.saveDirectory(game) == elsewhere);
+    // A folder named beyond the system code page, as the settings file holds it (UTF-8).
+    config.mergeJson(R"({"save":{"directory":"sävé-日本"}})");
+    REQUIRE(config.saveDirectory(game) == game / std::filesystem::path(u8"sävé-日本"));
     // With nothing said, that is beside the running program, never the per-user folder.
     const GameConfig plain;
     REQUIRE(plain.saveDirectory().filename() == "saves");
@@ -467,6 +498,20 @@ TEST_CASE("multiplayer modes round-trip and invalid modes leave the selection un
     GameConfig restored;
     REQUIRE(restored.loadFile(file));
     CHECK(restored.multiplayer.mode == MultiplayerMode::Hurt);
+}
+
+TEST_CASE("the online camera rule is kept with the settings, shared unless said otherwise",
+          "[game][config][multiplayer]") {
+    GameConfig config;
+    CHECK_FALSE(config.multiplayer.soloCamera);
+    config.mergeJson(R"({"game":{"soloCamera":true}})");
+    CHECK(config.multiplayer.soloCamera);
+    GameConfig restored;
+    restored.mergeJson(config.toJson());
+    CHECK(restored.multiplayer.soloCamera);
+    CHECK(restored.toJson() == config.toJson());
+    config.mergeJson(R"({"game":{"difficulty":"easy"}})"); // nothing said: unchanged
+    CHECK(config.multiplayer.soloCamera);
 }
 
 } // namespace

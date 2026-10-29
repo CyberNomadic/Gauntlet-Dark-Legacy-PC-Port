@@ -21,6 +21,7 @@
 
 namespace gdl {
 class NativeStateDigest;
+class WorldCollision;
 
 /**
  * A level's geometry placed by its layout. What never moves is gathered per texture into a
@@ -44,13 +45,17 @@ public:
     /** What additive geometry is shaded: glows, flames and force fields add their whole
      * texture, whichever way they face. */
     static constexpr Color kUnlit{255, 255, 255, 255};
-    /** What a vertex is shaded: additive parts whole, prelit ones by their own colour, the
-     * rest by the lights. */
-    static Color shadeOf(bool additive, bool prelit, const MeshVertex& vertex, const Vec3& normal,
-                         const WorldLighting& lighting);
-    /** The same at `position`, with the point lights added. */
+    /** What a vertex of level geometry is shaded. The original never lights it by the
+     * level's light (every world node carries ZATR_NOSHADING): additive parts add their
+     * whole texture, a mesh with a colour stream (prelit, lightmapped) is its baked colour
+     * and anything else is flat (sDrawGeom, prim 128 under the x2 combiner). */
+    static Color shadeOf(bool additive, bool prelit, const MeshVertex& vertex);
+    /** The same at `position`, with the point lights added and the level's darkening taken. */
     static Color shadeAt(bool additive, bool prelit, const MeshVertex& vertex, const Vec3& position,
                          const Vec3& normal, const WorldLighting& lighting);
+    /** A baked five-bit colour at full strength: sDrawGeom divides the vertex colour by 248,
+     * so a channel of 248 is the whole texture. */
+    static Color bakedShade(Color color);
     /** Negative depth biases defer flagged overlays until after ordinary sorted objects. */
     static constexpr f32 kSortBackBias = -10000.0f;
     static constexpr f32 kSortBehindBias = -20000.0f;
@@ -64,13 +69,18 @@ public:
      * `backgroundObjects` explicitly selects backdrop sheets drawn before solids;
      * the model's sorting flags alone do not make geometry a backdrop.
      * `cameraFadeObjects` opts selected geometry into the short camera-depth fade
-     * without changing the authored layout, collision or gameplay opacity. */
+     * without changing the authored layout, collision or gameplay opacity. `floors`, when
+     * given, tells a decal lying on the level's floor from a veil hanging over it. */
     bool build(const WorldLayout& layout, ModelSet& models, TextureSet& textures,
                RenderDevice& device, const WorldLighting& lighting = {},
                std::span<TextureSet* const> lenders = {},
                std::span<const usize> controlledObjects = {},
                std::span<const usize> backgroundObjects = {},
-               std::span<const usize> cameraFadeObjects = {});
+               std::span<const usize> cameraFadeObjects = {},
+               const WorldCollision* floors = nullptr);
+    /** A sheet no thicker than this, lying on another object's floor, is a decal. */
+    static constexpr f32 kDecalThickness = 1.0f;
+    static constexpr f32 kDecalLift = 0.5f; ///< how far above its floor a decal may lie
 
     void clear();
     bool built() const { return !m_batches.empty() || !m_units.empty(); }

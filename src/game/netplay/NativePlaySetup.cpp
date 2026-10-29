@@ -87,10 +87,11 @@ std::unique_ptr<NativePlaySetup> NativePlaySetup::create(const GameConfig& local
     result->m_config.timing.tickRate = kTickRate;
     result->m_config.difficulty.level = DifficultyConfig::kNames[room.difficulty];
     result->m_config.multiplayer.mode = static_cast<MultiplayerMode>(room.friendlyFire);
+    result->m_config.multiplayer.soloCamera = room.camera == 1;
+    result->m_config.game.aggressorMode = room.aggressor == 1;
     result->m_config.combat.autoMelee = contract.autoMelee;
     result->m_config.combat.autoActivateItems = contract.autoActivateItems;
     result->m_config.game.expandedShop = contract.expandedShop;
-    result->m_config.game.aggressorMode = contract.aggressorMode;
     result->m_config.combat.autoAim = contract.autoAim;
     result->m_options = options;
     result->m_scene = contract.scene;
@@ -106,11 +107,12 @@ std::unique_ptr<NativePlaySetup> NativePlaySetup::create(const GameConfig& local
     digest.word(room.maxPlayers);
     digest.word(room.difficulty);
     digest.word(room.friendlyFire);
+    digest.word(room.camera);
+    digest.word(room.aggressor);
     digest.word(kTickRate);
     digest.boolean(contract.autoMelee);
     digest.boolean(contract.autoActivateItems);
     digest.boolean(contract.expandedShop);
-    digest.boolean(contract.aggressorMode);
     digest.boolean(contract.autoAim);
     digest.string(result->m_config.text.language);
     digest.real(result->m_stopTimeTotal); // Initial campaign value, never a live-state digest.

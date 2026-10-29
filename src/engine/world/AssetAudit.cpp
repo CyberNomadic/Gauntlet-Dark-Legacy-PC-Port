@@ -1,3 +1,4 @@
+#include "engine/platform/Paths.h"
 #include "engine/world/AssetAudit.h"
 
 #include <algorithm>
@@ -156,7 +157,7 @@ AssetAuditResult auditAssets(const std::filesystem::path& directory,
                     issue(record,
                           std::format("{} requests {} frames at {} in {} ({} slots)",
                                       source.frameName, count, first->index,
-                                      first->set->directory().string(), first->set->size()));
+                                      paths::utf8(first->set->directory()), first->set->size()));
                     continue;
                 }
                 for (usize frame = 0; frame < count; ++frame) {

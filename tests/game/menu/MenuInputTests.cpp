@@ -487,4 +487,5 @@ TEST_CASE("a text field takes the typing keys away from the menu", "[game][menu]
     REQUIRE(menu.typed.empty());
 }
 
+
 } // namespace

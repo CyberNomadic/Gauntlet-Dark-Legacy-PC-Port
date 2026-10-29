@@ -41,6 +41,9 @@ public:
     bool drained() const;
 
     f64 queuedSeconds() const;
+    /** How much of what was pushed the mixer has taken so far, in the stream's own seconds:
+     * the stream's clock, for a picture to keep to. */
+    f64 playedSeconds() const;
     void setVolume(f32 volume);
     f32 volume() const;
     /** Where the sound sits between the speakers: -1 fully left, 0 centred, 1 fully right,
@@ -69,6 +72,7 @@ private:
     f32 m_gainStep; ///< how far a gain slides per output frame
     std::vector<f32> m_queue;
     usize m_readFrame = 0; ///< the frame being read; the one before it is kept for the curve
+    u64 m_playedFrames = 0; ///< input frames the mixer has gone past, ever
     f64 m_fraction = 0.0;
     f32 m_volume = 1.0f;
     f32 m_leftGain = 1.0f;

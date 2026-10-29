@@ -78,6 +78,14 @@ public:
      * theirs and no wall; nullopt with none. */
     static std::optional<Vec3> rescueSpot(std::span<const PlayerRuntime> players, usize lost,
                                           const WorldCollision& collision);
+    /** Moves the party for the tick. `cameraYaws` holds, per player in `players`, the yaw
+     * of the camera their stick is read against: one shared yaw for every player, or each
+     * one's own camera's under solo cameras. */
+    static std::vector<CameraSubject> step(std::span<PlayerRuntime> players,
+                                           std::span<const PlayInput> inputs, bool held,
+                                           std::span<const f32> cameraYaws, s32 ticks, f32 seconds,
+                                           const WorldCollision& collision, const Events& events);
+    /** The same with one camera yaw for the whole party. */
     static std::vector<CameraSubject> step(std::span<PlayerRuntime> players,
                                            std::span<const PlayInput> inputs, bool held,
                                            f32 cameraYaw, s32 ticks, f32 seconds,

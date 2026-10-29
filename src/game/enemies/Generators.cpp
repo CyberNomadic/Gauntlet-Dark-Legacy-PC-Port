@@ -64,8 +64,8 @@ constexpr bool kHasExtraGeneratorMember =
 void Generators::appendSimulationDigest(
     NativeStateDigest& digest, const Simulation& state,
     std::optional<std::span<const TextureAnimator::Clock>> savedClocks) {
-    const auto& [collision, generators, view, attention, bodies, scales, players, specialBirth,
-                 nextInstance, bound] = state;
+    const auto& [collision, generators, view, attentionGate, bodies, scales, players,
+                 specialBirth, nextInstance, bound] = state;
     digest.resource(collision);
     digest.wide(generators.size());
     static_assert(std::is_aggregate_v<Generator>);
@@ -77,9 +77,9 @@ void Generators::appendSimulationDigest(
     }
     digest.flag(view.has_value());
     if (view) {
-        digest.fields<8>(*view);
+        digest.value(*view);
     }
-    digest.value(attention);
+    digest.flag(attentionGate);
     digest.wide(bodies.size());
     // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage): every body is checked before use
     for (usize index = 0; index < bodies.size(); ++index) {
@@ -195,7 +195,7 @@ constexpr f32 kGeneratorViewScale = 8.0f;
 constexpr f32 kStockGeneratorRadius = 3.0f;
 constexpr f32 kStockGeneratorHeight = 6.0f;
 constexpr s32 kStockGeneratorHitPoints = 100;
-constexpr f32 kAttentionRangeSquared = 2500.0f; ///< do_items, lbl_80343C50 (50 world units)
+constexpr f32 kAttentionRange = 50.0f; ///< do_items, lbl_80343C50 (50 world units)
 
 f32 flatDistance(const Vec3& a, const Vec3& b) {
     const f32 dx = a.x - b.x;
@@ -212,11 +212,8 @@ bool sameObstacle(const Obstacle& a, const Obstacle& b) {
                              a.enemyItem->radius == b.enemyItem->radius));
 }
 
-bool sameView(const std::optional<ViewVolume>& a, const std::optional<ViewVolume>& b) {
-    return a.has_value() == b.has_value() &&
-           (!a || (a->position == b->position && a->right == b->right && a->up == b->up &&
-                   a->forward == b->forward && a->sinX == b->sinX && a->cosX == b->cosX &&
-                   a->sinY == b->sinY && a->cosY == b->cosY));
+bool sameView(const std::optional<ViewSet>& a, const std::optional<ViewSet>& b) {
+    return a == b;
 }
 
 constexpr f32 kCheckpointMagnitude = 1'000'000;
@@ -311,7 +308,7 @@ bool Generators::equalLocal(const LocalSnapshot& left, const LocalSnapshot& righ
         return false;
     }
     const auto values = [](const Simulation& value) {
-        return std::tie(value.attention, value.scales, value.players, value.specialBirth,
+        return std::tie(value.attentionGate, value.scales, value.players, value.specialBirth,
                         value.nextInstance, value.bound);
     };
     return values(a) == values(b) &&
@@ -352,20 +349,17 @@ bool Generators::Checkpoint::operator==(const Checkpoint& other) const {
     return roster == other.roster && generators == other.generators && bodies == other.bodies &&
            scales == other.scales && players == other.players &&
            specialBirth == other.specialBirth && sameView(view, other.view) &&
-           attention == other.attention;
+           attentionGate == other.attentionGate;
 }
 
 bool Generators::Checkpoint::valid() const {
     if (roster.size() > kMaxGenerators || generators.size() != roster.size() ||
         bodies.size() > static_cast<usize>(kEnemyKindCount) + 2 || players < 0 || players > 4 ||
         !bounded(scales.health, 0, 10000) || !bounded(scales.rate, 0, 10000) ||
-        !bounded(scales.most, 0, 10000) || (attention && !bounded(*attention))) {
+        !bounded(scales.most, 0, 10000)) {
         return false;
     }
-    if (view &&
-        (!bounded(view->position) || !bounded(view->right) || !bounded(view->up) ||
-         !bounded(view->forward) || !bounded(view->sinX, -1, 1) || !bounded(view->cosX, -1, 1) ||
-         !bounded(view->sinY, -1, 1) || !bounded(view->cosY, -1, 1))) {
+    if (view && !view->bounded(kCheckpointMagnitude)) {
         return false;
     }
     for (usize index = 0; index < bodies.size(); ++index) {
@@ -409,7 +403,7 @@ std::optional<Generators::Checkpoint> Generators::checkpoint() const {
     result.players = m_sim.players;
     result.specialBirth = m_sim.specialBirth;
     result.view = m_sim.view;
-    result.attention = m_sim.attention;
+    result.attentionGate = m_sim.attentionGate;
     return result.valid() ? std::optional{std::move(result)} : std::nullopt;
 }
 
@@ -497,7 +491,7 @@ bool Generators::commitRestore(Prepared&& prepared) {
     m_sim.players = data->values.players;
     m_sim.specialBirth = data->values.specialBirth;
     m_sim.view = data->values.view;
-    m_sim.attention = data->values.attention;
+    m_sim.attentionGate = data->values.attentionGate;
     ++m_restoreGeneration;
     return true;
 }
@@ -815,6 +809,46 @@ std::optional<s32> Generators::spawn(RenderDevice& device, Enemies& enemies, s32
     return static_cast<s32>(m_sim.generators.size()) - 1;
 }
 
+std::optional<s32> Generators::spawnImported(RenderDevice& device, Enemies& enemies,
+                                             const ImportedGenerator& imported) {
+    const auto finite = [](const Vec3& value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    };
+    const auto& body = imported.body;
+    if (!m_sim.bound || imported.kind < 0 || imported.kind >= kSwarmKindCount ||
+        imported.tier < 1 || imported.tier > kStates || imported.minimumPlayers < 0 ||
+        imported.minimumPlayers > 4 || !finite(imported.position) || !std::isfinite(imported.yaw) ||
+        body.type != ItemInfo::kGenerator || !std::isfinite(body.radius) || body.radius <= 0 ||
+        body.radius > 32 || !std::isfinite(body.height) || body.height <= 0 || body.height > 64 ||
+        !std::isfinite(body.xSize) || body.xSize < 0 || body.xSize > 32 ||
+        !std::isfinite(body.zSize) || body.zSize < 0 || body.zSize > 32 ||
+        !finite(body.collisionOffset) || body.hitPoints <= 0 || body.hitPoints > 100000 ||
+        body.armor < 0 || (body.collisionType != 1 && body.collisionType != 3)) {
+        return std::nullopt;
+    }
+    Placement placement;
+    placement.info = &body;
+    placement.body = &body;
+    placement.kind = imported.kind;
+    placement.strength = imported.tier;
+    placement.authoredStrength = imported.tier;
+    placement.position = imported.position;
+    placement.rotation = Vec3{0, imported.yaw, 0};
+    placement.minPlayers = imported.minimumPlayers;
+    if (!stand(device, enemies, placement, nullptr, m_realmItems, m_lenders)) {
+        return std::nullopt;
+    }
+    syncFloors();
+    const s32 id = static_cast<s32>(m_sim.generators.size()) - 1;
+    m_externalBodies.push_back(instanceOf(id));
+    return id;
+}
+
+bool Generators::externallyPresented(s32 id) const {
+    const u64 instance = instanceOf(id);
+    return instance != 0 && std::ranges::find(m_externalBodies, instance) != m_externalBodies.end();
+}
+
 void Generators::bindSupport(Generator& generator, const ItemInfo& info, const Vec3& authored,
                              const WorldCollision* collision) {
     if (collision == nullptr || (info.collisionFlags & 1U) != 0) {
@@ -943,12 +977,13 @@ void Generators::clear() {
     ++m_restoreGeneration;
     m_sim.bound = false;
     m_roster.clear();
+    m_externalBodies.clear();
     m_records.clear();
     m_realmItems = nullptr;
     m_lenders.clear();
     m_sim.collision = nullptr;
     m_sim.view.reset();
-    m_sim.attention.reset();
+    m_sim.attentionGate = false;
     m_sim.specialBirth = 0;
     m_sim.nextInstance = 1;
     m_sim.generators.clear();
@@ -971,13 +1006,11 @@ bool Generators::seen(const Generator& generator) const {
         TargetAssist::itemAcquisition(generator.placement, generator.collisionOffset,
                                       generator.targetRadius, generator.targetHeight, 1)
             .point;
-    if (!m_sim.view->sees(point, generator.viewRadius)) {
-        return false;
-    }
-    // do_items applies this extra gate in normal/debug camera modes (1/2), not
-    // the legacy camera used by bosses. An expanded sphere alone admits distant huts.
-    return !m_sim.attention ||
-           glm::dot(point - *m_sim.attention, point - *m_sim.attention) <= kAttentionRangeSquared;
+    // do_items applies the attention gate in normal/debug camera modes (1/2), not the
+    // legacy camera used by bosses: an expanded sphere alone admits distant huts. Under
+    // solo cameras any player's camera counts, each with its own point.
+    return m_sim.view->sees(point, generator.viewRadius,
+                            m_sim.attentionGate ? kAttentionRange : 0.0f);
 }
 
 void Generators::updatePresence(Generator& generator, bool seen) const {
@@ -1109,7 +1142,7 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
         spawn.clearance = patrol ? generator.patrolClearance : generator.clearance;
         spawn.patrolBirth = patrol;
         // A frenzied hut's births take any slot, replacing even a body in view.
-        spawn.priority = frenzied             ? EnemySpawn::Priority::Visible
+        spawn.priority = frenzied            ? EnemySpawn::Priority::Visible
                          : visible || patrol ? EnemySpawn::Priority::Offscreen
                                              : EnemySpawn::Priority::FreeSlotOnly;
         spawn.generator = static_cast<s32>(g);
@@ -1136,10 +1169,9 @@ void Generators::update(s32 ticks, Enemies& enemies, std::span<const EnemyView> 
         }
         // The next takes longer, the countdown stretched by a share that grows a birth at a
         // time and wraps, and cut by the swarm's aggression.
-        generator.countdown = static_cast<s32>(kCountdownScale *
-                                               static_cast<f32>(generator.interval) *
-                                               (1.0f + generator.ratio) /
-                                               m_aggression.breedingPace());
+        generator.countdown =
+            static_cast<s32>(kCountdownScale * static_cast<f32>(generator.interval) *
+                             (1.0f + generator.ratio) / m_aggression.breedingPace());
         generator.ratio += 1.0f / (2.0f * static_cast<f32>(generator.most));
         if (generator.ratio > 1.0f) {
             generator.ratio = 0.0f;
@@ -1284,7 +1316,8 @@ void Generators::draw(RenderDevice& device, const Mat4& clip, const WorldLightin
                       f32 presentationAlpha, TreeModel::Pass pass) {
     for (usize index = 0; index < m_sim.generators.size(); ++index) {
         const Generator& generator = m_sim.generators[index];
-        if (generator.presence != Generator::Presence::Shown) {
+        if (generator.presence != Generator::Presence::Shown ||
+            externallyPresented(static_cast<s32>(index))) {
             continue;
         }
         if (generator.boss) {
@@ -1329,7 +1362,7 @@ std::vector<Generators::BodyResource> Generators::bodyResources() const {
 std::vector<Generators::Presentation> Generators::presentation() const {
     std::vector<Presentation> result;
     for (usize index = 0; index < m_sim.generators.size(); ++index) {
-        if (!bodyShown(static_cast<s32>(index))) {
+        if (!bodyShown(static_cast<s32>(index)) || externallyPresented(static_cast<s32>(index))) {
             continue;
         }
         const auto& generator = m_sim.generators[index];

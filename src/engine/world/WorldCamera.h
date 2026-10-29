@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
@@ -12,7 +14,8 @@ namespace gdl {
  */
 struct WorldCamera {
     bool operator==(const WorldCamera&) const = default;
-    template <class Visitor> friend void visitNativeState(Visitor& visitor, const WorldCamera& value) {
+    template <class Visitor>
+    friend void visitNativeState(Visitor& visitor, const WorldCamera& value) {
         visitor.template fields<4>(value);
     }
 
@@ -59,10 +62,41 @@ struct ViewVolume {
     f32 cosX = 0.8660254f;
     f32 sinY = 0.5f; ///< and of half the view up and down
     f32 cosY = 0.8660254f;
+    bool operator==(const ViewVolume&) const = default;
+    template <class Visitor>
+    friend void visitNativeState(Visitor& visitor, const ViewVolume& value) {
+        visitor.template fields<8>(value);
+    }
 
     static ViewVolume of(const WorldCamera& camera, f32 horizontalFov, f32 aspect);
     /** Whether a sphere of `radius` about `centre` is at least partly in view. */
     bool sees(const Vec3& centre, f32 radius) const;
+};
+
+/**
+ * What a party's cameras take in together: up to four views, each with the point its camera
+ * looks at, for telling whether something is on anyone's screen. The party's shared camera
+ * is one view; under solo cameras each player's own camera is one.
+ */
+struct ViewSet {
+    static constexpr usize kMost = 4;
+    std::array<ViewVolume, kMost> eyes{};
+    std::array<Vec3, kMost> attentions{};
+    u32 count = 0;
+    bool operator==(const ViewSet&) const = default;
+    template <class Visitor> friend void visitNativeState(Visitor& visitor, const ViewSet& value) {
+        visitor.template fields<3>(value);
+    }
+
+    static ViewSet of(const ViewVolume& eye, const Vec3& attention);
+    /** Adds a view; past `kMost` it is dropped. */
+    void add(const ViewVolume& eye, const Vec3& attention);
+    /** Whether any view sees the sphere; with `reach` above zero, only a view whose camera
+     * looks within `reach` of the centre counts (the original's attention gate). */
+    bool sees(const Vec3& centre, f32 radius, f32 reach = 0.0f) const;
+    /** Whether every value is finite and within `magnitude`, the sines and cosines within
+     * one: what a checkpoint of the views accepts. */
+    bool bounded(f32 magnitude) const;
 };
 
 /** Where a camera stands and which way its axes point, for what must face it. */
@@ -81,6 +115,8 @@ struct CameraFrame {
     static constexpr u32 kFacingMask = 0xFU;
     static constexpr u32 kFacingFull = 4; ///< the whole rotation follows the camera
     static constexpr u32 kFacingTop = 8;  ///< roll an XZ ribbon toward the eye, preserving its z
+    // Adapter-only semantic mode; 9 is not a recovered GameCube/N64 flag value.
+    static constexpr u32 kFacingProjectedYaw = 9; ///< yaw using the centre's projected view depth
     static u32 facingOf(u32 objectFlags) { return (objectFlags >> kFacingShift) & kFacingMask; }
 
     /** Face the camera fully, about a ribbon's authored z (kFacingTop), or about the

@@ -26,8 +26,11 @@ struct CharacterProfile {
 
 class CharacterProfilePacket {
 public:
-    static constexpr u32 kVersion = 1;
-    static constexpr usize kBytes = 512;
+    static constexpr u32 kVersion = 2;
+    static constexpr usize kBaseBytes = 512;
+    static constexpr usize kMinBytes = kBaseBytes + kLegendsPlatformCount * 36;
+    // Leave room for the largest enclosing reliable-control header (16 bytes).
+    static constexpr usize kMaxBytes = 1184;
     static std::optional<std::vector<u8>> encode(const CharacterProfile& profile);
     static std::optional<CharacterProfile> decode(std::span<const u8> bytes);
 };

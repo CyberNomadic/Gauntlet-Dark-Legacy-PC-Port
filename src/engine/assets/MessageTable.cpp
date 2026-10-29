@@ -12,6 +12,7 @@
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/TextRom.h"
 
@@ -34,8 +35,9 @@ bool MessageTable::load(const std::filesystem::path& file) {
     m_lists.clear();
     m_byName.clear();
     try {
-        const auto native = AssetLocator(file.parent_path()).find(file.stem().string() + ".rom");
-        if (native || toLowerAscii(file.extension().string()) == ".rom") {
+        const auto native =
+            AssetLocator(file.parent_path()).find(paths::utf8(file.stem()) + ".rom");
+        if (native || toLowerAscii(paths::utf8(file.extension())) == ".rom") {
             auto source = formats::TextRom::parse(readFile(native.value_or(file)));
             m_fonts = std::move(source.fonts);
             for (auto& entry : source.messages) {
@@ -84,7 +86,7 @@ bool MessageTable::load(const std::filesystem::path& file) {
             m_lists.push_back(std::move(list));
         }
     } catch (const std::exception& e) {
-        log::warn("Message table {}: {}", file.string(), e.what());
+        log::warn("Message table {}: {}", paths::utf8(file), e.what());
         m_fonts.clear();
         m_messages.clear();
         m_lists.clear();

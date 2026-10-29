@@ -1,6 +1,5 @@
+#include "engine/platform/Paths.h"
 #include "engine/world/WorldCollision.h"
-
-#include "engine/io/NativeStateDigest.h"
 
 #include <algorithm>
 #include <bit>
@@ -16,6 +15,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/io/NativeStateDigest.h"
 
 #include "formats/WorldFile.h"
 
@@ -44,8 +44,7 @@ bool sameTransform(const Mat4& left, const Mat4& right) {
     // the same transform merely because floating-point equality does.
     for (s32 column = 0; column < 4; ++column) {
         for (s32 row = 0; row < 4; ++row) {
-            if (std::bit_cast<u32>(left[column][row]) !=
-                std::bit_cast<u32>(right[column][row])) {
+            if (std::bit_cast<u32>(left[column][row]) != std::bit_cast<u32>(right[column][row])) {
                 return false;
             }
         }
@@ -340,7 +339,7 @@ bool WorldCollision::load(const std::filesystem::path& directory, const WorldLay
         }
         build(std::move(triangles), parents);
     } catch (const std::exception& e) {
-        log::warn("World collision: cannot read {}: {}", file.string(), e.what());
+        log::warn("World collision: cannot read {}: {}", paths::utf8(file), e.what());
         clear();
         return false;
     }
@@ -392,9 +391,11 @@ bool WorldCollision::appendNativeDigest(NativeStateDigest& digest) const {
     return appendDigest(digest, nullptr);
 }
 
-bool WorldCollision::appendLocalDigest(NativeStateDigest& digest, const LocalSnapshot& saved) const {
+bool WorldCollision::appendLocalDigest(NativeStateDigest& digest,
+                                       const LocalSnapshot& saved) const {
     // Guard the native snapshot roster too; owner/epoch are admission, not peer state.
-    [[maybe_unused]] const auto& [transforms, hidden, contactOnly, blockedFloorExits, owner, binding] = saved;
+    [[maybe_unused]] const auto& [transforms, hidden, contactOnly, blockedFloorExits, owner,
+                                  binding] = saved;
     if (!canRestoreLocal(saved)) {
         digest.invalidate();
         return false;
@@ -481,7 +482,7 @@ void WorldCollision::MovingObject::place(const Mat4& world,
     }
 }
 
-void WorldCollision::setMovingObjects(std::span<const s32> objects) {
+void WorldCollision::setMovingObjects(std::span<const s32> objects, u32 additionalFlags) {
     m_localBinding = std::make_shared<const u8>(0);
     m_geometryDigest.reset();
     for (const s32 object : objects) {
@@ -490,8 +491,9 @@ void WorldCollision::setMovingObjects(std::span<const s32> objects) {
         }
         MovingObject mover;
         mover.object = object;
-        for (const CollisionTriangle& triangle : m_triangles) {
+        for (CollisionTriangle triangle : m_triangles) {
             if (triangle.object == object) {
+                triangle.objectFlags |= additionalFlags;
                 mover.local.push_back(triangle);
                 mover.placed.push_back(triangle);
             }
@@ -787,8 +789,7 @@ std::optional<FloorHit> WorldCollision::projectileFloorAt(const Vec3& position, 
 }
 
 std::optional<FloorHit> WorldCollision::surfaceAt(const Vec3& position, f32 above, f32 below,
-                                                  bool liquid, f32 edgeReach,
-                                                  const Vec2* direction,
+                                                  bool liquid, f32 edgeReach, const Vec2* direction,
                                                   bool nearestToHeight) const {
     std::optional<FloorHit> best;
     const f32 highest = position.y + above;
@@ -836,9 +837,9 @@ std::optional<FloorHit> WorldCollision::surfaceAt(const Vec3& position, f32 abov
                          return;
                      }
                      const bool better =
-                         !best.has_value() ||
-                         (nearestToHeight ? std::abs(y - position.y) < std::abs(best->y - position.y)
-                                          : y > best->y);
+                         !best.has_value() || (nearestToHeight ? std::abs(y - position.y) <
+                                                                     std::abs(best->y - position.y)
+                                                               : y > best->y);
                      if (better) {
                          best = FloorHit{y,
                                          triangle.normal,
@@ -1095,8 +1096,7 @@ std::optional<f32> sphereMeetsPoint(const Vec3& from, const Vec3& step, f32 radi
 /** The earliest time the moving sphere touches the segment `a`-`b` between its ends, and
  * where on the segment. */
 std::optional<std::pair<f32, Vec3>> sphereMeetsSegment(const Vec3& from, const Vec3& step,
-                                                       f32 radius, const Vec3& a,
-                                                       const Vec3& b) {
+                                                       f32 radius, const Vec3& a, const Vec3& b) {
     const Vec3 edge = b - a;
     const f32 length = glm::length(edge);
     if (length <= kSweepEpsilon) {
@@ -1243,8 +1243,11 @@ std::optional<FloorHit> WorldCollision::floorUnder(const Vec3& origin, f32 depth
                      if (insideXZ(triangle, here.x, here.y)) {
                          const f32 y = heightAt(here);
                          if (y <= origin.y && y >= lowest && (!face || y > face->y)) {
-                             face = FloorHit{y, triangle.normal, triangle.object,
-                                             triangle.objectFlags, {here.x, y, here.y}};
+                             face = FloorHit{y,
+                                             triangle.normal,
+                                             triangle.object,
+                                             triangle.objectFlags,
+                                             {here.x, y, here.y}};
                          }
                          return;
                      }
@@ -1267,7 +1270,10 @@ std::optional<FloorHit> WorldCollision::floorUnder(const Vec3& origin, f32 depth
                              continue;
                          }
                          edgeDistance = distance;
-                         edge = FloorHit{y, triangle.normal, triangle.object, triangle.objectFlags,
+                         edge = FloorHit{y,
+                                         triangle.normal,
+                                         triangle.object,
+                                         triangle.objectFlags,
                                          {point.x, y, point.y}};
                      }
                  });

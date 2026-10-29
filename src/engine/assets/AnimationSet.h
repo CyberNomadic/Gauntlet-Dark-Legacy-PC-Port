@@ -15,6 +15,10 @@
 
 namespace gdl {
 
+namespace formats {
+struct AnimationFile;
+}
+
 struct TreeNodeInfo {
     std::string name;
     std::string object; ///< archive object drawn at this node, empty for none
@@ -60,6 +64,8 @@ struct TrackInfo {
     static constexpr u16 kChannels = 0x777;
     static constexpr u16 kPitchYawRoll =
         0x8000; ///< rotate pitch, yaw then roll; else roll, yaw, pitch
+    static constexpr u16 kYawPitchRoll = 0x0800; ///< decoded adapters only
+    static constexpr u16 kLinearAngles = 0x1000; ///< continuous native Euler interpolation
     static constexpr u32 kChannelCount = 9;
 
     u32 node = 0;
@@ -155,6 +161,8 @@ class AnimationSet {
 public:
     /** Prefers anim.ps2; accepts animations.json for legacy inspection exports. */
     bool load(const std::filesystem::path& directory);
+    /** Builds the common animation representation from a decoded native archive. */
+    static AnimationSet fromDecoded(formats::AnimationFile source);
 
     bool loaded() const { return !m_trees.empty(); }
     usize size() const { return m_trees.size(); }

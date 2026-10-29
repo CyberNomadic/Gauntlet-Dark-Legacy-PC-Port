@@ -15,10 +15,11 @@ struct CameraFrame;
 
 /** One node's transform at a frame: Euler angles, offset from its rest position and scale. */
 struct NodePose {
+    enum class RotationOrder : u8 { RollYawPitch = 0, PitchYawRoll = 1, YawPitchRoll = 2 };
     Vec3 rotation{0.0f, 0.0f, 0.0f};
     Vec3 position{0.0f, 0.0f, 0.0f};
     Vec3 scale{1.0f, 1.0f, 1.0f};
-    bool pitchYawRoll = false; ///< rotation order, from the track
+    RotationOrder rotationOrder = RotationOrder::RollYawPitch;
     bool operator==(const NodePose&) const = default;
 };
 

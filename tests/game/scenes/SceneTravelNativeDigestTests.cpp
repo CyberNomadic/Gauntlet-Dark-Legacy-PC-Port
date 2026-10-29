@@ -387,7 +387,7 @@ TEST_CASE("hint menu and cursor digests retain hidden progression and typed nati
     HintMenu first;
     HintMenu second;
     const HintMenuLabels labels{
-        "HELP", {{"GENERAL", 39}, {"GUARDIANS", 40}}, "BACK", "SELECT", "PLAYER"};
+        "HELP", {{"GENERAL", 39}, {"GUARDIANS", 40}}, "SELECT", "PLAYER"};
     REQUIRE(first.open(firstPainter, {}, labels));
     REQUIRE(second.open(secondPainter, {}, labels));
     REQUIRE(native(first, resources) == native(second, resources));

@@ -72,6 +72,9 @@ public:
     static constexpr s32 kOpening = 1;
     static constexpr s32 kOpen = 2;
     static constexpr s32 kSeedStep = 439; ///< what each random pick moves the seed on by
+    /** The item loop (fn_800606FC) moves the shared seed on by one every frame it runs, so
+     * what a random chest holds wanders with time: the pick changes every thirty-two of them. */
+    static constexpr f32 kSeedTicksPerSecond = 30.0f;
     static constexpr f32 kCollectedSeconds = 8.0f / 60.0f; ///< ItemTouch's retirement delay
     static constexpr f32 kRefusalSeconds = 2.5f;
     static constexpr s32 kTransmuted = 1;        ///< the subtype a conversion leaves in the record
@@ -124,6 +127,9 @@ public:
               const WorldCollision* collision);
     void clear();
     usize size() const { return m_sim.chests.size(); }
+    /** The developer console decides whether a shut chest wants a key. False for a chest
+     * already open or gone. */
+    bool setLocked(usize index, bool locked);
     const Chest& chest(usize index) const { return m_sim.chests[index]; }
     void setPlayerCount(s32 players);
     /** Carries the container and its obstacle with its authored supporting platform. */
@@ -172,6 +178,7 @@ private:
     struct Simulation {
         std::vector<Chest> chests;
         u32 seed = 0;
+        f32 seedRemainder = 0.0f; ///< the part of a seed tick the last update left over
         bool operator==(const Simulation&) const = default;
     } m_sim;
 

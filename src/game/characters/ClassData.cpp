@@ -12,6 +12,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "game/characters/NativeClassData.h"
 
@@ -257,7 +258,7 @@ bool ClassDataSet::load(const std::filesystem::path& directory) {
         }
     }
     if (m_loadedCount == 0) {
-        log::warn("Class data: nothing readable under {}", directory.string());
+        log::warn("Class data: nothing readable under {}", paths::utf8(directory));
     }
     return m_loadedCount > 0;
 }

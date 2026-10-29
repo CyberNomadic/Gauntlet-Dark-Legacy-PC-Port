@@ -14,6 +14,8 @@
 
 #include "game/audio/ShopMusic.h"
 #include "game/config/ControlProfiles.h"
+#include "game/menu/MenuFont.h"
+#include "game/menu/OptionMenu.h"
 #include "game/players/PickupVoices.h"
 #include "game/shop/ShopLayout.h"
 
@@ -77,7 +79,7 @@ bool AfterLevelScene::open(RenderDevice& device, const GameContext& context,
             !m_select.load(context.unpackedRoot / "SELECT") ||
             !m_inventory.load(context.unpackedRoot / "INVENTORY") ||
             !m_static.load(context.unpackedRoot / "STATIC") ||
-            !m_font.load(context.unpackedRoot / "fonts/font32.json", 16) ||
+            !loadMenuFont(m_font, context.unpackedRoot, 16) ||
             !m_titles.load(context.unpackedRoot / "text/english.json")) {
             close();
             return false;
@@ -190,6 +192,7 @@ void AfterLevelScene::close() {
     }
     m_music = kNoSound;
     m_effects.clear();
+    m_announcement = Effect{};
     m_lastSounds.clear();
     m_pointerTargets.clear();
     m_hoverTargets.fill(std::nullopt);
@@ -253,6 +256,7 @@ void AfterLevelScene::advanceEffects(f64 seconds) {
     for (auto& effect : m_effects) {
         effect.advance(seconds);
     }
+    m_announcement.timing.advance(seconds);
     std::erase_if(m_effects, [](const SpeechTiming& effect) { return !effect.playing(); });
     if (m_context.sounds != nullptr) {
         std::erase_if(m_outputEffects,
@@ -268,16 +272,20 @@ void AfterLevelScene::announceLevel(s32 player) {
         return;
     }
     const CharacterSave& save = lane->member.save;
-    Effect after;
+    // Sumner speaks of one player at a time: a second announcement waits for the first to
+    // end, in the order the players reached their level panels.
+    Effect after = m_announcement;
     if (PickupVoices::carriesPojo(save)) {
-        after = effect(m_narratorSecond.find(kPojoName) ? m_narratorSecond : m_narrator, kPojoName);
+        after = effect(m_narratorSecond.find(kPojoName) ? m_narratorSecond : m_narrator, kPojoName,
+                       after);
     } else {
         after = effect(m_voices[static_cast<usize>(std::clamp(player, 0, 3))],
-                       PickupVoices::nameOf(save.character, save.color));
+                       PickupVoices::nameOf(save.character, save.color), after);
     }
     for (const std::string_view name : {kHasSound, kGainedLevelSound}) {
         after = effect(m_narratorSecond.find(name) ? m_narratorSecond : m_narrator, name, after);
     }
+    m_announcement = after;
 }
 void AfterLevelScene::playCue(const ShopEvent& event) {
     switch (event.cue) {
@@ -400,8 +408,16 @@ void AfterLevelScene::pointerInput(ShopSession::Inputs& inputs,
         input = mapMenuPointer(std::move(input), m_pointerTransform,
                                Rect{static_cast<f32>(lane.member.player * StatusBoxPainter::kWidth),
                                     0, StatusBoxPainter::kWidth, StatusBoxPainter::kY});
-        const bool moved = input.pointer && m_lastPointer[player] != input.pointer;
-        m_lastPointer[player] = input.pointer;
+        // A pointer chooses where it appears and once it has moved a little, never while
+        // it only rests where the rows scroll under it.
+        const bool moved = input.pointer && (!m_lastPointer[player] ||
+                                             glm::distance(*m_lastPointer[player], *input.pointer) >
+                                                 OptionMenu::kHoverMotion);
+        if (moved) {
+            m_lastPointer[player] = input.pointer;
+        } else if (!input.pointer) {
+            m_lastPointer[player].reset();
+        }
         const bool keyboard = input.up || input.down || input.left || input.right || input.select ||
                               input.back || input.start || input.upHeld || input.downHeld ||
                               input.leftHeld || input.rightHeld;

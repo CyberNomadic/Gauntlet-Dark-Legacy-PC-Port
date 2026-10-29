@@ -114,7 +114,14 @@ void PartyHud::drawStatus(Canvas& canvas, std::span<const PlayerRuntime> players
         view.keysShown = relicsShown();
         m_boxes.draw(canvas, player, view, true);
     }
-    m_sim.pickups.draw(canvas, m_boxes);
+    std::array<std::optional<s32>, PickupHud::kSlots> labelTops{};
+    for (s32 player = 0; player < kPlayerCount; ++player) {
+        if (selector(player).showing()) {
+            labelTops.at(static_cast<usize>(player)) =
+                selector(player).labelY(StatusBoxPainter::kY);
+        }
+    }
+    m_sim.pickups.draw(canvas, m_boxes, labelTops);
 }
 bool PartyHud::postHelp(s32 id, usize index, std::span<PlayerRuntime> players,
                         LevelSoundscape& audio, s32 number, std::optional<Vec3> position) {
@@ -156,9 +163,12 @@ bool PartyHud::postHelp(s32 id, usize index, std::span<PlayerRuntime> players,
             const std::span<const std::string_view> lines =
                 lead == HelpMessages::VoiceLead::PlayerHas ? std::span{has}
                                                            : std::span{has}.subspan(1);
+            // Becoming Pojo is announced under the character's own name; the original's
+            // "POJO IS NOW POJO" named the new form twice.
+            const bool asPojo = PickupVoices::carriesPojo(save) && id != HelpMessages::kNowPojo;
             audio.announce(players[index].figure->voice(),
-                           PickupVoices::nameOf(save.character, save.color),
-                           PickupVoices::carriesPojo(save), lines, wait);
+                           PickupVoices::nameOf(save.character, save.color), asPojo, lines,
+                           wait);
         } else {
             audio.queueNarration(spec->voice);
         }

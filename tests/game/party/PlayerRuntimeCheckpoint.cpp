@@ -68,7 +68,9 @@ bool progressValid(const ClassProgress& progress) {
            counter(progress.lifetime.enemiesKilled) &&
            counter(progress.lifetime.generatorsDestroyed) && counter(progress.lifetime.goldFound) &&
            std::isfinite(progress.lifetime.playSeconds) && progress.lifetime.playSeconds >= 0 &&
-           progress.lifetime.playSeconds <= 1e12;
+           progress.lifetime.playSeconds <= 1e12 &&
+           std::ranges::all_of(progress.legends,
+                               [](const auto& campaign) { return campaign.valid(); });
 }
 bool saveValid(const CharacterSave& save) {
     return save.name.size() <= kCharacterNameLength &&
@@ -86,11 +88,11 @@ bool sameProgress(const ClassProgress& a, const ClassProgress& b) {
     return std::tie(a.experience, a.gold, a.promotedLevel, a.health, a.fightAdd, a.armorAdd,
                     a.magicAdd, a.speedAdd, a.crystals, a.unlocked, a.inventory, a.relics, a.levels,
                     a.lifetime.enemiesKilled, a.lifetime.generatorsDestroyed, a.lifetime.goldFound,
-                    a.lifetime.playSeconds) ==
+                    a.lifetime.playSeconds, a.legends) ==
            std::tie(b.experience, b.gold, b.promotedLevel, b.health, b.fightAdd, b.armorAdd,
                     b.magicAdd, b.speedAdd, b.crystals, b.unlocked, b.inventory, b.relics, b.levels,
                     b.lifetime.enemiesKilled, b.lifetime.generatorsDestroyed, b.lifetime.goldFound,
-                    b.lifetime.playSeconds);
+                    b.lifetime.playSeconds, b.legends);
 }
 bool sameSave(const CharacterSave& a, const CharacterSave& b) {
     return std::tie(a.name, a.character, a.color, a.classUnlock, a.gold, a.levelTotal, a.autoAttack,

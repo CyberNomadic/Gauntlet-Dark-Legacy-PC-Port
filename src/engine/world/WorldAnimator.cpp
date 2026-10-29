@@ -11,14 +11,21 @@ namespace gdl {
 namespace {
 constexpr f32 kFrameSlack = 0.00001f;
 
+/** A continuous turn: a spinning decoration whose keys turn one way the whole way round. */
+struct ContinuousTurn {
+    s32 channel = -1; ///< the rotation channel it turns, 0 to 2
+    f32 rate = 0.0f;  ///< signed radians a frame, at the authored keys' pace
+    f32 seam = 0.0f;  ///< the frames from the last key back to the first at that rate
+};
+
 /** A spinning decoration crosses its loop seam, unlike a cart returning to its start.
  * Check only at wraps: authored keys and native timing remain untouched. */
-bool continuousTurn(const TrackInfo& track, s32 frames) {
+std::optional<ContinuousTurn> continuousTurn(const TrackInfo& track, s32 frames) {
     const u32 channels = track.flags & 0x1FFU;
     if ((channels != 1 && channels != 2 && channels != 4) || track.frames.size() < 3 ||
         track.values.size() != track.frames.size() || track.frames.front() != 0 ||
         track.frames.back() != frames - 1) {
-        return false;
+        return std::nullopt;
     }
     f32 turn = 0;
     f32 fastest = 0;
@@ -27,7 +34,7 @@ bool continuousTurn(const TrackInfo& track, s32 frames) {
         const f32 step = TreePose::wrapAngle(track.values[key] - track.values[key - 1]);
         if (interval <= 0 || std::abs(step) >= TreePose::kHoldAngle || step == 0 ||
             (turn != 0 && step * turn < 0)) {
-            return false;
+            return std::nullopt;
         }
         turn += step;
         fastest = std::max(fastest, std::abs(step) / interval);
@@ -36,8 +43,22 @@ bool continuousTurn(const TrackInfo& track, s32 frames) {
     // K1's exported full turns omit a closing sample: their final-to-first seam
     // can span two authored increments. A partial turn or a reversing reset is
     // not a continuous spin, even if its endpoints happen to be close together.
-    return std::abs(turn) > kPi && seam * turn >= -kFrameSlack &&
-           std::abs(seam) <= fastest * 2.5f + kFrameSlack;
+    if (std::abs(turn) <= kPi || seam * turn < -kFrameSlack ||
+        std::abs(seam) > fastest * 2.5f + kFrameSlack) {
+        return std::nullopt;
+    }
+    ContinuousTurn result;
+    result.channel = channels == 1 ? 0 : channels == 2 ? 1 : 2;
+    result.rate = turn < 0 ? -fastest : fastest;
+    // The keys that stop short of the turn leave the rest of it to the seam, which the
+    // loop runs through at the same pace so the spin never jolts; a closed turn has none.
+    result.seam = std::abs(seam) > kFrameSlack ? std::abs(seam) / fastest : 0.0f;
+    return result;
+}
+
+/** The whole cycle of a looping track: its keys, and a continuous turn's seam after them. */
+f32 cycleOf(const WorldAnimator::Cursor& cursor, f32 seam) {
+    return static_cast<f32>(cursor.frames - 1) + seam;
 }
 } // namespace
 
@@ -65,6 +86,11 @@ void WorldAnimator::bind(const WorldLayout& layout) {
         track.once = once;
         const auto last = static_cast<f32>(animation.frames - 1);
         track.frame = reverse ? last : std::clamp(animation.start, 0.0f, last);
+        if (const auto turn = continuousTurn(track.track, track.frames)) {
+            track.seam = turn->seam;
+            track.turnChannel = turn->channel;
+            track.turnRate = turn->rate;
+        }
         m_tracks.push_back(std::move(track));
     }
 }
@@ -148,8 +174,8 @@ void WorldAnimator::clear() {
 }
 
 bool WorldAnimator::Cursor::valid() const {
-    if (object < 0 || frames <= 0 || !std::isfinite(frame) || frame < 0 ||
-        frame > static_cast<f32>(frames - 1)) {
+    if (object < 0 || frames <= 0 || !std::isfinite(seam) || seam < 0 || seam > kMostSeamFrames ||
+        !std::isfinite(frame) || frame < 0 || frame > static_cast<f32>(frames - 1) + seam) {
         return false;
     }
     if (held) {
@@ -165,8 +191,8 @@ std::vector<WorldAnimator::Cursor> WorldAnimator::checkpoint() const {
     std::vector<Cursor> result;
     result.reserve(m_tracks.size());
     for (const auto& track : m_tracks) {
-        result.push_back({track.object, track.frames, track.frame, track.reverse, track.once,
-                          track.finished, track.held, track.presentationCut});
+        result.push_back({track.object, track.frames, track.seam, track.frame, track.reverse,
+                          track.once, track.finished, track.held, track.presentationCut});
     }
     return result;
 }
@@ -178,7 +204,8 @@ bool WorldAnimator::restore(std::span<const Cursor> cursors) {
     for (usize i = 0; i < cursors.size(); ++i) {
         const auto& cursor = cursors[i];
         const auto& track = m_tracks[i];
-        if (!cursor.valid() || cursor.object != track.object || cursor.frames != track.frames) {
+        if (!cursor.valid() || cursor.object != track.object || cursor.frames != track.frames ||
+            cursor.seam != track.seam) {
             return false;
         }
     }
@@ -250,7 +277,15 @@ void WorldAnimator::cycle(s32 object, bool active) {
 }
 
 void WorldAnimator::pose(const Track& track, WorldScene& scene) {
-    const NodePose pose = TreePose::sample(track.track, track.frame);
+    const auto last = static_cast<f32>(track.frames - 1);
+    NodePose pose = TreePose::sample(track.track, std::min(track.frame, last));
+    if (track.seam > 0.0f && track.frame > last && track.turnChannel >= 0) {
+        // Through the seam the turn runs on from the last key at the authored rate, so
+        // the first key is reached as the cycle closes.
+        pose.rotation[track.turnChannel] =
+            TreePose::wrapAngle(pose.rotation[track.turnChannel] +
+                                track.turnRate * std::min(track.frame - last, track.seam));
+    }
     scene.setObjectTransform(static_cast<usize>(track.object),
                              TreePose::localMatrix(pose, track.origin), track.presentationCut);
 }
@@ -296,11 +331,13 @@ void WorldAnimator::step(f32 seconds, WorldScene& scene, bool pauseLoops) {
             } else if (!restarted && std::floor(track.frame) <= 1) {
                 m_cycleEvents.push_back({track.object, false});
             }
-        } else if (track.frame + kFrameSlack >= last) {
-            // A looping world track's final key closes the cycle; retain time past
-            // that key rather than lengthening every loop by a caller-dependent amount.
-            track.frame = last > 0.0f && track.frame >= last ? std::fmod(track.frame, last) : 0.0f;
-            track.presentationCut = !continuousTurn(track.track, track.frames);
+        } else if (const f32 cycle = cycleOf(track, track.seam); track.frame + kFrameSlack >= cycle) {
+            // A looping world track's final key closes the cycle (a continuous turn's seam
+            // after it); retain time past that point rather than lengthening every loop by a
+            // caller-dependent amount.
+            track.frame =
+                cycle > 0.0f && track.frame >= cycle ? std::fmod(track.frame, cycle) : 0.0f;
+            track.presentationCut = track.turnChannel < 0;
             m_cycleEvents.push_back({track.object, true});
         } else if (!restarted && std::floor(track.frame) <= 1) {
             m_cycleEvents.push_back({track.object, false});

@@ -88,13 +88,14 @@ std::string roomDigest(const RoomSnapshot& room) {
     // Canonical admitted roster order, not JSON ordering or local socket IDs.
     // Readiness is intentionally excluded: it changes without a new revision.
     std::vector<u8> bytes;
-    string(bytes, "gdl-native-room-v1");
+    string(bytes, "gdl-native-room-v2");
     string(bytes, room.code);
     string(bytes, room.host);
     word(bytes, static_cast<u32>(room.revision));
     word(bytes, static_cast<u32>(room.revision >> 32));
     bytes.insert(bytes.end(), {room.settings.maxPlayers, room.settings.difficulty,
-                               room.settings.friendlyFire, static_cast<u8>(room.members.size())});
+                               room.settings.friendlyFire, room.settings.camera,
+                               room.settings.aggressor, static_cast<u8>(room.members.size())});
     for (const auto& row : room.members) {
         string(bytes, row.peer);
         bytes.push_back(static_cast<u8>(row.seats.size()));
@@ -137,7 +138,7 @@ std::optional<NativeMessage> decodeNative(std::span<const u8> bytes) {
             contract.rules.scene = reader.readU32();
             const u8 flags = reader.readU8();
             contract.rules.startupDelay = reader.readU8();
-            if ((flags & ~31U) != 0 || reader.readU8() != kNativeInitialization ||
+            if ((flags & ~15U) != 0 || reader.readU8() != kNativeInitialization ||
                 reader.readU8() != 0) {
                 return std::nullopt;
             }
@@ -145,7 +146,6 @@ std::optional<NativeMessage> decodeNative(std::span<const u8> bytes) {
             contract.rules.autoActivateItems = (flags & 2U) != 0;
             contract.rules.expandedShop = (flags & 4U) != 0;
             contract.rules.autoAim = (flags & 8U) != 0;
-            contract.rules.aggressorMode = (flags & 16U) != 0;
             contract.identity.build = string(reader, 256);
             contract.identity.runtime = string(reader, 256);
             contract.identity.content = string(reader, 64);
@@ -179,8 +179,7 @@ std::vector<u8> nativeBytes(NativeKind kind, const std::string& scope,
         word(bytes, rules.scene);
         const auto flags = static_cast<u8>(
             static_cast<u8>(rules.autoMelee) | (static_cast<u8>(rules.autoActivateItems) << 1U) |
-            (static_cast<u8>(rules.expandedShop) << 2U) | (static_cast<u8>(rules.autoAim) << 3U) |
-            (static_cast<u8>(rules.aggressorMode) << 4U));
+            (static_cast<u8>(rules.expandedShop) << 2U) | (static_cast<u8>(rules.autoAim) << 3U));
         bytes.insert(bytes.end(), {flags, rules.startupDelay, kNativeInitialization, 0});
         string(bytes, contract.identity.build);
         string(bytes, contract.identity.runtime);

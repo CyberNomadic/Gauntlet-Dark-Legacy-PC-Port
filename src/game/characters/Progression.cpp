@@ -2,11 +2,24 @@
 
 #include <algorithm>
 
+#include "engine/core/Assert.h"
 #include "engine/core/Types.h"
 
 #include "game/characters/CharacterSave.h"
 
 namespace gdl::game {
+
+const LegendsProgress& ClassProgress::legendsProgress(LegendsPlatform platform) const {
+    const auto index = static_cast<usize>(platform);
+    GDL_VERIFY(index < legends.size(), "Legends platform must be in range");
+    return legends[index];
+}
+
+LegendsProgress& ClassProgress::legendsProgress(LegendsPlatform platform) {
+    const auto index = static_cast<usize>(platform);
+    GDL_VERIFY(index < legends.size(), "Legends platform must be in range");
+    return legends[index];
+}
 
 s32 ClassProgress::appearanceLevel() const {
     return std::clamp(promotedLevel < 0 ? experienceLevel(experience) : promotedLevel, 1,

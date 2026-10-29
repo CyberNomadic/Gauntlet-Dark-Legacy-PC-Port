@@ -17,7 +17,7 @@ TEST_CASE("travel profile packets are bounded and reject malformed envelopes",
     state.profile.progress.inventory.potions = {1, 2, 3};
     const auto bytes = PartyCheckpointPacket::encode(state);
     REQUIRE(bytes);
-    CHECK(bytes->size() == PartyCheckpointPacket::kBytes);
+    CHECK(bytes->size() == PartyCheckpointPacket::kMinBytes);
     CHECK(bytes->size() <= 1200);
     const auto decoded = PartyCheckpointPacket::decode(*bytes);
     REQUIRE(decoded);
@@ -31,6 +31,9 @@ TEST_CASE("travel profile packets are bounded and reject malformed envelopes",
     auto bad = *bytes;
     bad.push_back(0);
     CHECK_FALSE(PartyCheckpointPacket::decode(bad));
+    bad = *bytes;
+    bad[4] = 1;
+    CHECK_FALSE(PartyCheckpointPacket::decode(bad));
     for (const usize offset : {0U, 4U, 5U, 6U, 7U, 16U}) {
         bad = *bytes;
         bad[offset] = 255;
@@ -41,5 +44,21 @@ TEST_CASE("travel profile packets are bounded and reject malformed envelopes",
     state.epoch = 1;
     state.seat = 4;
     CHECK_FALSE(PartyCheckpointPacket::encode(state));
+}
+
+TEST_CASE("travel profiles retain both isolated Legends campaigns",
+          "[netplay][party-checkpoint][legends]") {
+    PartyCheckpoint state;
+    state.epoch = 17;
+    state.profile.name = "PLAYER";
+    state.profile.progress.legends[0] = {0x8000000000000000ULL, 2, 4, 8, {"mount1", "town4"}};
+    state.profile.progress.legends[1] = {16, 32, 64, 128, {"levela1"}};
+    const auto bytes = PartyCheckpointPacket::encode(state);
+    REQUIRE(bytes);
+    CHECK(bytes->size() > PartyCheckpointPacket::kMinBytes);
+    CHECK(bytes->size() <= PartyCheckpointPacket::kMaxBytes);
+    const auto decoded = PartyCheckpointPacket::decode(*bytes);
+    REQUIRE(decoded);
+    CHECK(decoded->profile.progress.legends == state.profile.progress.legends);
 }
 } // namespace

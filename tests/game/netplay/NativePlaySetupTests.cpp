@@ -12,8 +12,7 @@ using namespace gdl;
 using namespace gdl::game;
 
 NativePlaySetup::Contract contract() {
-    return {12,   true, false, true, false, "native-build-1", "native-assets-1", "resolved-data-1",
-            false};
+    return {12, true, false, true, false, "native-build-1", "native-assets-1", "resolved-data-1"};
 }
 CharacterSave source() {
     CharacterSave save;
@@ -120,8 +119,13 @@ TEST_CASE("native setup freezes agreed gameplay but preserves local output prefe
     CHECK_FALSE(a->config().combat.autoActivateItems);
     CHECK(a->config().game.expandedShop);
     CHECK(a->config().combat.autoAim == contract().autoAim);
-    CHECK(a->config().game.aggressorMode == contract().aggressorMode);
+    CHECK_FALSE(a->config().game.aggressorMode); // the room's rule, not either machine's
     CHECK(b->config().combat.autoAim == contract().autoAim);
+    const auto aggressive =
+        NativePlaySetup::create(first, {4, 2, 2, 0, 1}, party(), {}, contract());
+    REQUIRE(aggressive);
+    CHECK(aggressive->config().game.aggressorMode);
+    CHECK(aggressive->digest() != a->digest());
     CHECK(b->config().timing.gameplayFrameRate == 144);
     CHECK(b->config().display.windowWidth == 1920);
     CHECK_FALSE(b->config().display.vsync);
@@ -202,6 +206,12 @@ TEST_CASE("native setup digest distinguishes every agreed contract field",
     }
     SECTION("friendly fire") {
         room.friendlyFire = 2;
+    }
+    SECTION("camera rule") {
+        room.camera = 1;
+    }
+    SECTION("aggressor mode") {
+        room.aggressor = 1;
     }
     SECTION("text language") {
         config.text.language = "fr";
@@ -332,6 +342,9 @@ TEST_CASE("native setup refuses invalid room roster profile and option values",
     }
     SECTION("unknown friendly fire") {
         room.friendlyFire = 3;
+    }
+    SECTION("unknown camera rule") {
+        room.camera = 2;
     }
     SECTION("empty party") {
         profiles = {};

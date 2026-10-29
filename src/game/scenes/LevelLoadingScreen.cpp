@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <exception>
 #include <format>
 
@@ -11,6 +12,7 @@
 
 #include "game/characters/Progression.h"
 #include "game/players/TurboMeter.h"
+#include "game/scenes/MapPicture.h"
 
 namespace gdl::game {
 namespace {
@@ -65,6 +67,8 @@ void LevelLoadingScreen::open(RenderDevice& device, const GameContext& context,
     m_name = level.name;
     m_sounds = context.sounds;
     m_textures.load(context.unpackedRoot / "MAPS" / ("LEVEL" + level.name));
+    m_map = join(device, "MAP_" + m_name);
+    m_preview = join(device, "LDMAP_" + m_name);
     WorldData data;
     if (data.load(context.unpackedRoot / level.worldDataFile())) {
         if (const auto* info = data.level(level.name)) {
@@ -93,6 +97,8 @@ void LevelLoadingScreen::close() {
     m_status = {};
     m_sounds = nullptr;
     m_bank = {};
+    m_map = {};
+    m_preview = {};
     m_textures.releaseTextures();
     m_textures = {};
     m_transition.release();
@@ -165,15 +171,56 @@ void LevelLoadingScreen::tile(Canvas& canvas, RenderDevice& device, std::string_
     }
 }
 
+LevelLoadingScreen::Picture LevelLoadingScreen::join(RenderDevice& device,
+                                                     std::string_view prefix) {
+    std::array<MapPicture::Tile, 4> tiles{};
+    for (usize i = 0; i < tiles.size(); ++i) {
+        const auto index = m_textures.find(std::format("{}_{:02}", prefix, i));
+        if (!index) {
+            return {};
+        }
+        try {
+            tiles[i].image = &m_textures.image(*index);
+        } catch (const std::exception& e) {
+            log::warn("Map {}: {}", prefix, e.what());
+            return {};
+        }
+        tiles[i].x = static_cast<u32>(kTilePositions[i].x);
+        tiles[i].y = static_cast<u32>(kTilePositions[i].y);
+    }
+    // Each tile slid into line with the others where the art was cut off its place, and the
+    // joins softened, so no break shows.
+    const Image sheet = MapPicture::seamless(tiles);
+    if (sheet.pixels.empty()) {
+        return {};
+    }
+    const TextureDesc desc{sheet.width, sheet.height, TextureFilter::Linear,
+                           TextureWrap::ClampToEdge};
+    Picture joined;
+    joined.texture = device.createTexture(desc, sheet.pixels);
+    joined.width = static_cast<f32>(sheet.width);
+    joined.height = static_cast<f32>(sheet.height);
+    return joined;
+}
+
+void LevelLoadingScreen::picture(Canvas& canvas, RenderDevice& device, const Picture& joined,
+                                 std::string_view prefix, f32 alpha) {
+    if (joined.texture) {
+        canvas.draw(*joined.texture, Rect{0, 0, joined.width, joined.height},
+                    Color::white().withAlpha(static_cast<u8>(255 * std::clamp(alpha, 0.0f, 1.0f))));
+        return;
+    }
+    for (usize i = 0; i < kTilePositions.size(); ++i) {
+        tile(canvas, device, std::format("{}_{:02}", prefix, i), kTilePositions[i], alpha);
+    }
+}
+
 void LevelLoadingScreen::draw(Canvas& canvas, RenderDevice& device) {
     canvas.fillScreen(Color::black());
     if (m_transitionOnly) {
         m_transition.draw(canvas, 512);
     } else {
-        for (s32 i = 0; i < 4; ++i) {
-            tile(canvas, device, std::format("MAP_{}_{:02}", m_name, i),
-                 kTilePositions[static_cast<usize>(i)], 1);
-        }
+        picture(canvas, device, m_map, "MAP_" + m_name, 1);
         for (usize i = 0; i < m_dashes; ++i) {
             tile(canvas, device, std::format("DASH_{}_{}", m_name, i + 1), m_points[i + 1], 1);
         }
@@ -186,10 +233,7 @@ void LevelLoadingScreen::draw(Canvas& canvas, RenderDevice& device) {
             const f32 glow = static_cast<f32>(std::clamp((59 + ramp * 255) / 60, 4, 250)) / 255;
             tile(canvas, device, "MAP_" + m_name + "GLOW", m_points.front(), glow);
         }
-        for (s32 i = 0; i < 4; ++i) {
-            tile(canvas, device, std::format("LDMAP_{}_{:02}", m_name, i),
-                 kTilePositions[static_cast<usize>(i)], previewAlpha());
-        }
+        picture(canvas, device, m_preview, "LDMAP_" + m_name, previewAlpha());
     }
     // Keep the complete status panels, including their upper strips and meter artwork,
     // above both the map and the crossfading preview.

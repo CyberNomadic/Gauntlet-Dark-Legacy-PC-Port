@@ -9,6 +9,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
@@ -147,7 +148,8 @@ bool WorldData::load(const std::filesystem::path& file) {
     m_sounds.clear();
     m_realm = 0;
     m_prefix.clear();
-    if (const auto native = AssetLocator(file.parent_path()).find(file.stem().string() + ".wad")) {
+    if (const auto native =
+            AssetLocator(file.parent_path()).find(paths::utf8(file.stem()) + ".wad")) {
         return loadNative(*native);
     }
     try {
@@ -182,7 +184,7 @@ bool WorldData::load(const std::filesystem::path& file) {
             m_audio.push_back(parseAudio(audio));
         }
     } catch (const std::exception& e) {
-        log::warn("World data {}: {}", file.string(), e.what());
+        log::warn("World data {}: {}", paths::utf8(file), e.what());
         m_levels.clear();
         return false;
     }

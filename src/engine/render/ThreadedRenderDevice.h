@@ -3,8 +3,9 @@
 #include "engine/render/RenderDevice.h"
 
 namespace gdl {
-/** Records immutable draw packets on the application thread and executes Vulkan work on
- * one worker. At most one frame is recording, queued or executing: beginFrame returns
+/** Records immutable draw packets on the application thread and executes the backend's
+ * work on one worker, which the backend is handed to before the worker starts. At most
+ * one frame is recording, queued or executing: beginFrame returns
  * false instead of waiting for presentation. Gameplay never accesses worker-owned GPU
  * resources. Texture proxies and packets retain resources through their last draw.
  * All public methods belong to the application thread; waitIdle is an explicit barrier

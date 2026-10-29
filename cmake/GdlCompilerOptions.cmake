@@ -33,3 +33,12 @@ function(gdl_apply_compiler_options target)
         $<$<CONFIG:Debug>:GDL_DEBUG=1>
         $<$<NOT:$<CONFIG:Debug>>:GDL_DEBUG=0>)
 endfunction()
+
+# gdl_use_utf8_code_page(<target>): on Windows the executable runs with UTF-8 as its active
+# code page (Windows 10 1903 and later), so narrow strings, arguments and
+# std::filesystem::path::string() carry every character a path or a name may hold.
+function(gdl_use_utf8_code_page target)
+    if(WIN32 AND MSVC)
+        target_sources(${target} PRIVATE "${CMAKE_SOURCE_DIR}/cmake/utf8.manifest")
+    endif()
+endfunction()

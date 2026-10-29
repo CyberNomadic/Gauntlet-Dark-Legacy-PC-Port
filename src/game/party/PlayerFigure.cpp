@@ -14,6 +14,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
+#include "engine/platform/Paths.h"
 
 #include "game/characters/ClassData.h"
 #include "game/characters/NameCheats.h"
@@ -55,8 +56,8 @@ std::optional<usize> armOf(u32 equipment) {
 std::string playerResourceKey(const std::filesystem::path& directory) {
     // Only the actual class and bank/costume components identify this binding.
     // Installation paths and on-disk filename casing can differ between peers.
-    auto key = std::format("players/{}/{}", directory.parent_path().filename().generic_string(),
-                           directory.filename().generic_string());
+    auto key = std::format("players/{}/{}", paths::genericUtf8(directory.parent_path().filename()),
+                           paths::genericUtf8(directory.filename()));
     for (char& value : key) {
         if (value >= 'A' && value <= 'Z') {
             value = static_cast<char>(value + ('a' - 'A'));
@@ -123,7 +124,7 @@ std::unique_ptr<PlayerFigure> PlayerFigure::load(RenderDevice& device,
     if (!figure->m_costumeArchive.models.load(directory) ||
         !figure->m_costumeArchive.textures.load(directory) ||
         !figure->m_costumeArchive.trees.load(directory)) {
-        log::warn("Tower: no model for the {} {} under {}", costume, cls, directory.string());
+        log::warn("Tower: no model for the {} {} under {}", costume, cls, paths::utf8(directory));
         return nullptr;
     }
     const std::string_view override = costumeOverride(save);
@@ -224,6 +225,27 @@ void PlayerFigure::loadMissile(const std::filesystem::path& root, const Characte
             }
         }
     }
+    // A name-selected costume shipped without a throw (Old Thor's HIR) throws what its
+    // class's colour costume throws, from that costume's own archive.
+    if (!bound && !costumeOverride(save).empty()) {
+        const std::filesystem::path colour = root / kPlayersDirectory /
+                                             classCode(archiveClassOf(save.character)) /
+                                             colorCode(save.color);
+        if (m_missileFallbackArchive.load(colour)) {
+            for (const std::string& candidate :
+                 {name, std::format("{}_THROW1", MissileSpec::of(save.character).model)}) {
+                const auto tree = m_missileFallbackArchive.trees.find(candidate);
+                if (tree.has_value() &&
+                    bindModel(m_missile, m_missileFallbackArchive.trees.tree(*tree),
+                              m_missileFallbackArchive, device)) {
+                    bound = true;
+                    m_missileName = candidate;
+                    m_missileArchive = &m_missileFallbackArchive;
+                    break;
+                }
+            }
+        }
+    }
     if (!bound) {
         log::warn("Tower: no {} for the {} to throw", name, classCode(save.character));
     }
@@ -247,7 +269,7 @@ void PlayerFigure::loadWeapon(const CharacterSave& save, RenderDevice& device) {
         weapon = std::format("WEAP_{}_HD{}", colorCode(save.color), tier);
     }
     if (!m_costumeArchive.models.find(weapon).has_value()) {
-        log::warn("Tower: no {} in {}", weapon, m_directory.string());
+        log::warn("Tower: no {} in {}", weapon, paths::utf8(m_directory));
         return;
     }
     for (usize n = 0; n < m_costume->nodes.size() && m_handNode < 0; ++n) {
@@ -259,7 +281,7 @@ void PlayerFigure::loadWeapon(const CharacterSave& save, RenderDevice& device) {
         }
     }
     if (m_handNode < 0) {
-        log::warn("Tower: no hand to hold {} in {}", weapon, m_directory.string());
+        log::warn("Tower: no hand to hold {} in {}", weapon, paths::utf8(m_directory));
         return;
     }
     m_weaponTree.name = weapon;
@@ -358,7 +380,7 @@ void PlayerFigure::loadActions(const std::filesystem::path& root, const Characte
     const auto tree = m_actions.load(directory) ? m_actions.find(cls) : std::nullopt;
     if (!tree.has_value() || !m_action.animator.bind(m_actions.tree(*tree), enter)) {
         log::warn("Tower: no sequences for the {} under {}; the figure stands still", cls,
-                  directory.string());
+                  paths::utf8(directory));
         return;
     }
     m_action.animator.setCharacter(save.character);
@@ -398,7 +420,7 @@ void PlayerFigure::loadActions(const std::filesystem::path& root, const Characte
 }
 
 void PlayerFigure::animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDeed deed,
-                            bool chainHeldMelee) {
+                           bool chainHeldMelee) {
     ++m_action.revision;
     m_visualTransforms.clear();
     m_costumeTextures.advance(seconds);
@@ -427,6 +449,26 @@ void PlayerFigure::animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDee
     m_action.transforms.resize(m_costume->nodes.size());
     for (usize n = 0; n < m_action.transforms.size(); ++n) {
         m_action.transforms[n] = poseTransform(n, m_action.animator.pose());
+    }
+}
+
+void PlayerFigure::animateDeparture(f32 seconds) {
+    if (!std::isfinite(seconds) || seconds <= 0) {
+        return;
+    }
+    ++m_action.revision;
+    m_visualTransforms.clear();
+    m_costumeTextures.advance(seconds);
+    m_action.familiarPending = false;
+    m_action.familiarReleased = false;
+    m_action.animator.advancePresentation(seconds);
+    m_companion.update(seconds, m_action.animator.action(), false, false);
+    m_familiar.update(seconds, false);
+    if (m_costume && m_action.animator.bound()) {
+        m_action.transforms.resize(m_costume->nodes.size());
+        for (usize n = 0; n < m_action.transforms.size(); ++n) {
+            m_action.transforms[n] = poseTransform(n, m_action.animator.pose());
+        }
     }
 }
 

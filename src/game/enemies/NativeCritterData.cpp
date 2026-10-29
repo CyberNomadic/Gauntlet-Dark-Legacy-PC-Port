@@ -8,6 +8,7 @@
 #include "engine/core/Strings.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/CritterWad.h"
 #include "game/critters/CritterData.h"
@@ -146,7 +147,7 @@ bool CritterData::loadNative(const std::filesystem::path& file, usize typeIndex)
     if (moves.empty()) {
         throw FormatError("critter wad: type has no moves");
     }
-    m_name = normalizeAssetName(file.stem().string());
+    m_name = normalizeAssetName(paths::utf8(file.stem()));
     m_folder = toLowerAscii(descriptor.name);
     m_prefix = descriptor.prefix;
     m_kind = static_cast<CombatantKind>(descriptor.type);

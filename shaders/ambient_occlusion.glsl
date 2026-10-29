@@ -1,12 +1,12 @@
 #include "scene_depth.glsl"
-layout(set = 0, binding = 0) uniform sampler2D scene;
-layout(location = 0) in vec2 uv;
+SAMPLER_2D(0, scene)
+VARYING(0) in vec2 uv;
 layout(location = 0) out vec4 color;
-layout(push_constant) uniform Occlusion {
+PUSH_CONSTANTS_BEGIN(Occlusion)
     mat4 clipToView;
     vec4 ao; // world radius, surface bias, maximum darkening, MSAA samples
     vec4 pixel;
-} settings;
+PUSH_CONSTANTS_END(Occlusion, settings)
 vec3 positionAt(vec2 at) {
     float depth = sceneDepthAt(at, settings.pixel.xy, int(settings.ao.w));
     vec4 p = settings.clipToView * vec4(at * 2.0 - 1.0, depth, 1.0);

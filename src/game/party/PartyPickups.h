@@ -18,6 +18,7 @@
 #include "game/level/LevelFixtures.h"
 #include "game/level/LevelWorld.h"
 #include "game/party/PlayerRuntime.h"
+#include "game/players/ItemPickup.h"
 #include "game/players/PickupVoices.h"
 
 namespace gdl::game {
@@ -59,8 +60,19 @@ public:
         bool autoActivateItems = true;
     };
 
+    /** The share of a full turbo meter from which a Turbo pickup is stored rather than
+     * used: Auto-Use would spend it to fill a meter that is all but full already. */
+    static constexpr f32 kTurboStoreShare = 0.9f;
+    /** Whether a Turbo pickup taken with Auto-Use on waits in the inventory, the meter at
+     * `held` of `TurboMeter::kFull` being nine tenths full or more. */
+    static bool storesTurbo(f32 held);
+
     /** Takes what the party stands on (an open chest's contents from beside it). */
     void collect(RenderDevice& device, std::span<PlayerRuntime> players, const Services& services);
+    /** Present a completed native grant without applying it again or sharing GDL relics.
+     * Recipient is the party index; an empty offer is a native campaign award. */
+    void presentTaken(const ItemOffer& offer, const ItemTaking& taking, std::string_view itemName,
+                      usize recipient, std::span<PlayerRuntime> players, const Services& services);
     /** Exact native reach, including an opened container's held pickup anchor. */
     static std::vector<Collector> collectors(std::span<const PlayerRuntime> players,
                                              const LevelWorld& world, const Chests& chests);
@@ -97,6 +109,10 @@ public:
     static void dropKeys(RenderDevice& device, LevelWorld& world, PlayerRuntime& runtime);
 
 private:
+    static void beginTaking(const ItemOffer& offer, const ItemTaking& taking,
+                            PlayerRuntime& runtime, const Services& services);
+    void finishTaking(const ItemTaking& taking, std::string_view itemName, usize recipient,
+                      std::span<PlayerRuntime> players, const Services& services);
     std::optional<s32> take(const Pickup& pickup, std::span<PlayerRuntime> players,
                             const Services& services);
     static void complainOfTheft(s32 opener, s32 taker, std::span<const PlayerRuntime> players,

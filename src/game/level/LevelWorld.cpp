@@ -11,6 +11,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/platform/Paths.h"
 
 #include "game/bosses/BossDefinition.h"
 #include "game/effects/DynamicLights.h"
@@ -54,6 +55,12 @@ void makeMoltenBallsContactOnly(const WorldLayout& layout, WorldCollision& colli
 } // namespace
 
 bool LevelWorld::appendDigest(NativeStateDigest& digest, const LocalSnapshot* saved) const {
+    if (m_imported) {
+        // Native presentation/trigger state has no rollback contract yet. Never
+        // authenticate a partial imported world as an ordinary network stage.
+        digest.invalidate();
+        return false;
+    }
     digest.string("LevelWorld/1");
     digest.value(m_ref);
     digest.resource(&m_layout);
@@ -137,7 +144,7 @@ void LevelWorld::saveLocal(LocalSnapshot& saved) const {
 
 bool LevelWorld::canRestoreLocal(const LocalSnapshot& saved) const {
     const auto binding = saved.m_binding.lock();
-    return saved.m_owner == this && binding && binding == m_checkpointBinding &&
+    return !m_imported && saved.m_owner == this && binding && binding == m_checkpointBinding &&
            m_scene.canRestoreLocal(saved.m_scene) &&
            m_worldAnimator.canRestoreLocal(saved.m_worldAnimator) &&
            m_collision.canRestoreLocal(saved.m_collision) &&
@@ -190,10 +197,10 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
                       const LevelRef& level) {
     clear();
     m_ref = level;
-    const std::filesystem::path directory = unpackedRoot / m_ref.directory;
+    const std::filesystem::path directory = unpackedRoot / paths::fromUtf8(m_ref.directory);
     const AssetLocator levelFiles(directory);
     if (!levelFiles.find("worlds.ps2") && !levelFiles.find("world.json")) {
-        log::info("Level: no world data under {}", directory.string());
+        log::info("Level: no world data under {}", paths::utf8(directory));
         return false;
     }
     if (!m_layout.load(directory) || !m_models.load(directory) || !m_textures.load(directory)) {
@@ -285,8 +292,13 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
             }
         }
     }
+    // The collision comes first: the scene asks it which translucent sheets lie on a floor.
+    if (!m_collision.load(directory, m_layout)) {
+        log::warn("Level: no collision; characters will walk through everything");
+    }
     if (!m_scene.build(m_layout, m_models, m_textures, device, m_sim.lighting, lent,
-                       controlledObjects, backgroundObjects, cameraFadeObjects)) {
+                       controlledObjects, backgroundObjects, cameraFadeObjects,
+                       m_collision.loaded() ? &m_collision : nullptr)) {
         clear();
         return false;
     }
@@ -301,9 +313,6 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
     m_textureAnimator.apply(m_scene);
     m_sim.particles.bind(m_layout, m_textures, device, lent);
     m_sim.frameRemainder = 0.0f;
-    if (!m_collision.load(directory, m_layout)) {
-        log::warn("Level: no collision; characters will walk through everything");
-    }
     // Objects flagged to move keep their collision in their own space, placed by their
     // transform: the animated, and the force fields that only fade.
     for (usize i = 0; i < m_layout.objects().size(); ++i) {
@@ -360,9 +369,58 @@ bool LevelWorld::load(RenderDevice& device, const std::filesystem::path& unpacke
     return true;
 }
 
+bool LevelWorld::loadImported(RenderDevice& device, const std::filesystem::path& unpackedRoot,
+                              const LevelRef& level, WorldLayout layout, WorldCollision collision,
+                              std::shared_ptr<ImportedLevel> imported) {
+    // The native adapter owns its own fixture and campaign semantics. Keeping
+    // their records out of the GC helper rosters prevents e.g. a native rune
+    // index from becoming a GDL runestone or a native switch becoming a GC gate.
+    if (level.realmId != -1 || !imported || !collision.loaded() || !layout.itemInfos().empty() ||
+        !layout.itemInstances().empty() || !layout.animations().empty() ||
+        !layout.particleTemplates().empty()) {
+        log::warn("Imported level: missing collision/presentation or incompatible common metadata");
+        return false;
+    }
+    clear();
+    m_ref = level;
+    m_layout = std::move(layout);
+    m_collision = std::move(collision);
+    // Imported owners may borrow this address; bind only the final member,
+    // never the by-value parameter that is destroyed when loading returns.
+    imported->bindCollision(m_collision);
+    m_models = ModelSet{};
+    m_textures = TextureSet{};
+    m_animations = AnimationSet{};
+    m_worldData = WorldData{};
+    m_sim = Simulation{};
+    m_cameraRange = CameraRange{};
+    m_cameraRange.boundsMin = m_layout.minBounds();
+    m_cameraRange.boundsMax = m_layout.maxBounds();
+    m_worldAnimator.bind(m_layout);
+    m_triggers.bind(m_layout, m_worldAnimator, &m_collision);
+    m_hazards.bind(m_layout);
+    m_rotators.bind(m_layout);
+    if (!m_powerups.load(unpackedRoot / kPowerups)) {
+        log::warn("Imported level: common POWERUPS archive is absent");
+    }
+    const std::array<ItemArchive*, 1> archives{&m_powerups};
+    m_placedItems.bind(device, m_layout, &m_collision, archives);
+    for (const auto& locator : m_layout.locators()) {
+        if (locator.kind == LocatorKind::CameraGame) {
+            m_markers.push_back(locator);
+        }
+    }
+    // Publish only after all borrowed common bindings have been established.
+    m_imported = std::move(imported);
+    return true;
+}
+
 void LevelWorld::syncCollision() {
     for (const s32 object : m_movingObjects) {
         m_collision.setObjectTransform(object, m_scene.worldTransform(static_cast<usize>(object)));
+    }
+    if (m_imported) {
+        m_imported->syncCollision(m_collision);
     }
     m_placedItems.syncFloors();
 }
@@ -441,6 +499,9 @@ void LevelWorld::update(f32 seconds, bool timeStopped) {
     if (!built()) {
         return;
     }
+    if (m_imported) {
+        m_imported->update(seconds, timeStopped);
+    }
     m_worldAnimator.step(seconds, m_scene, timeStopped);
     m_destruction.update(m_worldAnimator.cycleEvents(), m_scene, m_collision);
     m_skorneArena.update(seconds);
@@ -478,7 +539,7 @@ void LevelWorld::loadLevelData(const std::filesystem::path& unpackedRoot) {
     const LevelInfo* level = m_worldData.load(file) ? m_worldData.level(m_ref.name) : nullptr;
     if (level == nullptr) {
         log::warn("Level: no level {} in {}; the default light and camera range stand in",
-                  m_ref.name, file.string());
+                  m_ref.name, paths::utf8(file));
         return;
     }
     m_level = level;
@@ -524,6 +585,7 @@ void LevelWorld::clear() {
     m_markers.clear();
     m_textures.releaseTextures();
     m_itemArchives.clear();
+    m_imported.reset();
     m_sim.frameRemainder = 0.0f;
     m_sim.textureAdvance = 0.0f;
     m_level = nullptr;

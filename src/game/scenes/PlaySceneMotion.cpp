@@ -90,7 +90,7 @@ PartyMotion::Events PlayScene::motionEvents() {
                 return m_attacks.comboImpact(flier, thrower, blow, m_players, attackTargets());
             },
         .flying = [this](usize i) { return cheats(m_players[i].actor.player()).noclip; },
-        .chainHeldMelee = m_context.config != nullptr && m_context.config->combat.autoMelee};
+        .chainHeldMelee = m_context.config != nullptr&& m_context.config->combat.autoMelee};
 }
 
 /** How many of the party stand in the level. */
@@ -162,6 +162,10 @@ void PlayScene::perform(usize i, PartyMotion::Action action) {
 
 /** Whether a step keeps the party within the shared view. */
 Vec3 PlayScene::limitStep(usize index, const Vec3& before, const Vec3& after) const {
+    // Each seat's own camera travels with them: nothing holds the party together.
+    if (soloViewActive()) {
+        return after;
+    }
     // A lone player's follow camera can travel with them. The shared
     // view must constrain separation; fixed boss views also need bounds.
     if (!bossCameraOn() && std::ranges::count_if(m_players, [](const PlayerRuntime& player) {
@@ -170,8 +174,16 @@ Vec3 PlayScene::limitStep(usize index, const Vec3& before, const Vec3& after) co
         return after;
     }
     // Use the unshaken gameplay camera, never the promotion/victory cut.
-    const auto& camera = bossCameraOn() ? m_sim.bossCamera.camera() : m_camera.camera();
-    const auto& attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
+    auto camera = bossCameraOn() ? m_sim.bossCamera.camera() : m_camera.camera();
+    auto attention = bossCameraOn() ? m_sim.bossCamera.attention() : m_camera.attention();
+    if (const auto* imported = m_world->imported()) {
+        if (const auto native = imported->camera()) {
+            camera = *native;
+            // Imported cameras have their own filtered focus. In particular,
+            // behind-camera recovery must not target the unused GDL camera.
+            attention = imported->cameraAttention().value_or(attention);
+        }
+    }
     const auto& actor = m_players[index].actor;
     return CameraMovementLimit::constrain(before, after, attention, camera, cameraView(),
                                           actor.followPoint() - actor.position());

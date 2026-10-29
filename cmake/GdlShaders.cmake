@@ -1,8 +1,11 @@
 # GLSL -> SPIR-V at build time, using glslc (Vulkan SDK) or glslang (vcpkg).
 #
-#   gdl_add_shaders(<target> OUTPUT_DIR <dir> SOURCES <file.vert> <file.frag> ...)
+#   gdl_add_shaders(<target> OUTPUT_DIR <dir> SOURCES <file.vert> <file.frag> ...
+#                   INCLUDES <file.glsl> ...)
 #
-# Produces <dir>/<file>.spv for every source and makes <target> depend on them.
+# Produces <dir>/<file>.spv for every source and makes <target> depend on them. The sources
+# and includes are copied beside the binaries as well, for the OpenGL device, which has the
+# driver compile the same text at run time.
 
 set(_gdl_shader_hints "$ENV{VULKAN_SDK}/Bin")
 foreach(_dir IN ITEMS
@@ -50,6 +53,18 @@ function(gdl_add_shaders target)
             COMMENT "Compiling shader ${_name}"
             VERBATIM)
         list(APPEND _outputs "${_out}")
+    endforeach()
+    foreach(_src IN LISTS ARG_SOURCES ARG_INCLUDES)
+        get_filename_component(_name "${_src}" NAME)
+        set(_copy "${ARG_OUTPUT_DIR}/${_name}")
+        add_custom_command(
+            OUTPUT "${_copy}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${ARG_OUTPUT_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src}" "${_copy}"
+            DEPENDS "${_src}"
+            COMMENT "Copying shader source ${_name}"
+            VERBATIM)
+        list(APPEND _outputs "${_copy}")
     endforeach()
 
     add_custom_target(${target}_shaders DEPENDS ${_outputs} SOURCES ${ARG_SOURCES})

@@ -8,6 +8,7 @@
 #include "engine/math/Math.h"
 #include "engine/render/AmbientOcclusion.h"
 
+#include "game/menu/MenuFont.h"
 #include "game/menu/OptionMenu.h"
 
 namespace gdl::game {
@@ -137,7 +138,7 @@ bool AttractScene::openNext(RenderDevice& device, const GameContext& context) {
             // silences both the level music and effects. Do not change shared mixer
             // volumes: title music and movies resume normally on the next screen.
             m_textures.load(context.unpackedRoot / "STATIC");
-            if (m_font.load(context.unpackedRoot / "fonts/font32.json", 16)) {
+            if (loadMenuFont(m_font, context.unpackedRoot, 16)) {
                 if (const auto font = m_textures.find("FONT32"); font.has_value()) {
                     m_text.setFont(&m_font, &m_textures.texture(device, *font));
                 }

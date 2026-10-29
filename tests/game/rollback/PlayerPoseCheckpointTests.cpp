@@ -119,7 +119,7 @@ TEST_CASE("bound tree pose checkpoints preserve every local channel and reject c
     changed.rotation = {-0.9f, 1.1f, -0.7f};
     changed.position = {0.4f, -0.3f, 0.2f};
     changed.scale = {-1, 0.8f, 1.2f};
-    changed.pitchYawRoll = true;
+    changed.rotationOrder = NodePose::RotationOrder::PitchYawRoll;
     original.setNodePose(1, changed);
     const auto state = original.checkpoint();
     REQUIRE(state);
@@ -203,8 +203,18 @@ TEST_CASE("transition pose wire rejects truncation forged counts flags and nonfi
         word(malformed, offset, std::bit_cast<u32>(std::numeric_limits<f32>::infinity()));
         CHECK_FALSE(PlayerPoseCheckpoint::decode(malformed));
         malformed = bytes;
-        word(malformed, offset + 36, 2);
+        word(malformed, offset + 36, static_cast<u32>(NodePose::RotationOrder::YawPitchRoll) + 1);
         CHECK_FALSE(PlayerPoseCheckpoint::decode(malformed));
+    }
+    for (const auto order :
+         {NodePose::RotationOrder::RollYawPitch, NodePose::RotationOrder::PitchYawRoll,
+          NodePose::RotationOrder::YawPitchRoll}) {
+        auto supported = *state;
+        supported.current.poses[0].rotationOrder = order;
+        supported.previous.poses[0].rotationOrder = order;
+        const auto encodedOrder = PlayerPoseCheckpoint::encode(supported);
+        REQUIRE(encodedOrder);
+        CHECK(PlayerPoseCheckpoint::decode(*encodedOrder) == supported);
     }
     auto invalid = *state;
     invalid.previous.nodes[0].rest.x += 0.1f;

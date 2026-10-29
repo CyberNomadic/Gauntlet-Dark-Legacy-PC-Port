@@ -72,6 +72,10 @@ class PackageTests(unittest.TestCase):
             "build/bin/shaders/bloom_ms.frag.spv": b"multisampled bloom and heat shader",
             "build/bin/shaders/ambient_occlusion.frag.spv": b"contact shading shader",
             "build/bin/shaders/ambient_occlusion_ms.frag.spv": b"multisampled contact shader",
+            "build/bin/shaders/platform.glsl": b"shader platform prelude",
+            "build/bin/shaders/immediate_constants.glsl": b"shader draw constants",
+            "build/bin/shaders/immediate.vert": b"vertex shader source",
+            "build/bin/shaders/immediate.frag": b"fragment shader source",
             "original/gAuNtLeT/PDATA/WAR.WAD": b"original player table\x00\xff",
             "original/gAuNtLeT/unknown/file.bin": b"preserve unrecognized files",
             "original/CARDDEMO/icon.tpl": b"original icon",
@@ -89,7 +93,8 @@ class PackageTests(unittest.TestCase):
 
     def test_every_optional_effect_shader_is_required_before_packaging(self):
         for name in ("bloom.frag.spv", "bloom_ms.frag.spv",
-                     "ambient_occlusion.frag.spv", "ambient_occlusion_ms.frag.spv"):
+                     "ambient_occlusion.frag.spv", "ambient_occlusion_ms.frag.spv",
+                     "platform.glsl", "immediate.frag"):
             with self.subTest(shader=name):
                 path = self.executable.parent / "shaders" / name
                 contents = path.read_bytes()

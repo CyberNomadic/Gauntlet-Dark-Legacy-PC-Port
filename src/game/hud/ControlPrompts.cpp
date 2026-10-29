@@ -129,8 +129,13 @@ void PromptDevices::update(const Input& input, const GameConfig& config) {
         keyboardActivity |= input.wasKeyPressed(static_cast<Key>(key));
     }
     m_pointer = pointer;
+    bool keyboardAutomatic = true;
+    bool anyPadActivity = false;
     for (usize player = 0; player < devices.size(); ++player) {
         const auto& source = devices[player];
+        if (source.keyboard && !config.controls[player].device.empty()) {
+            keyboardAutomatic = false; // the keyboard is someone's by choice: the pointer stays
+        }
         bool padActivity = false;
         if (input.isPadConnected(source.pad)) {
             for (s32 button = 0; button < static_cast<s32>(PadButton::Count); ++button) {
@@ -144,11 +149,17 @@ void PromptDevices::update(const Input& input, const GameConfig& config) {
         if (padActivity) {
             m_keyboard[player] = false;
             m_lastPlayer = static_cast<s32>(player);
+            anyPadActivity = true;
         }
         if (source.keyboard && keyboardActivity) {
             m_keyboard[player] = true;
             m_lastPlayer = static_cast<s32>(player);
         }
+    }
+    if (keyboardActivity || !keyboardAutomatic) {
+        m_cursorHidden = false;
+    } else if (anyPadActivity) {
+        m_cursorHidden = true;
     }
 }
 

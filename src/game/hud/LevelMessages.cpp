@@ -1,16 +1,18 @@
 #include "game/hud/LevelMessages.h"
 
 #include <exception>
+#include <sstream>
 #include <utility>
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/NativeStateDigest.h"
 
+#include "game/menu/MenuFont.h"
+
 namespace gdl::game {
 namespace {
 constexpr std::string_view kStaticDirectory = "STATIC";
-constexpr std::string_view kFontFile = "fonts/font32.json";
 constexpr s32 kFont32SpaceWidth = 16;
 constexpr std::string_view kFontTexture = "FONT32";
 constexpr std::string_view kGlowTexture = "FONT32_GLOW";
@@ -27,7 +29,7 @@ void LevelMessages::load(RenderDevice& device, TextureSet& textures,
     ScrollBoxArt art;
     m_text.setFont(nullptr, nullptr);
     if (!textures.load(root / kStaticDirectory) ||
-        !m_font32.load(root / kFontFile, kFont32SpaceWidth) ||
+        !loadMenuFont(m_font32, root, kFont32SpaceWidth) ||
         !m_scrollText.load(root / kScrollTextFile)) {
         log::warn("Tower: the scroll's art or texts are not unpacked; the welcome is skipped");
         m_scroll.setArt(art);
@@ -125,6 +127,73 @@ std::optional<LevelMessages::Look> LevelMessages::look() const {
     }
     return Look{*m_sim.message, m_sim.firstPage + static_cast<u32>(m_scroll.page()),
                 m_scroll.burnFrame(), m_scroll.promptAlpha()};
+}
+
+bool LevelMessages::openImported(RenderDevice& device, std::span<const std::string> text,
+                                 const StringTable* strings) {
+    if (!m_text.ready() || text.empty() || active()) {
+        return false;
+    }
+    constexpr f32 scale = .5f;
+    constexpr s32 width = ScrollBox::kMaxWidth - ScrollBox::kMargin;
+    constexpr usize linesPerPage = 9;
+    std::vector<std::string> pages;
+    std::string page;
+    usize lines = 0;
+    const auto append = [&](const std::string& line) {
+        if (lines != 0) {
+            page += '\n';
+        }
+        page += line;
+        if (++lines == linesPerPage) {
+            pages.push_back(std::exchange(page, {}));
+            lines = 0;
+        }
+    };
+    for (const auto& document : text) {
+        std::istringstream paragraphs{document};
+        std::string paragraph;
+        while (std::getline(paragraphs, paragraph)) {
+            std::istringstream words{paragraph};
+            std::string word;
+            std::string line;
+            while (words >> word) {
+                if (!line.empty() && m_text.measure(line + " " + word, scale) > width) {
+                    append(line);
+                    line.clear();
+                }
+                if (!line.empty()) {
+                    line += ' ';
+                }
+                // Malformed overlong tokens still cannot draw outside the parchment.
+                for (const char character : word) {
+                    if (!line.empty() && m_text.measure(line + character, scale) > width) {
+                        append(line);
+                        line.clear();
+                    }
+                    line += character;
+                }
+            }
+            if (!line.empty()) {
+                append(line);
+            }
+        }
+        if (!page.empty()) {
+            pages.push_back(std::exchange(page, {}));
+            lines = 0;
+        }
+    }
+    if (pages.empty()) {
+        return false;
+    }
+    const bool opened =
+        m_scroll.open(device, std::move(pages), scale,
+                      strings ? std::string(strings->get("scroll.pressButton")) : std::string{});
+    if (opened) {
+        m_sim.message.reset();
+        m_sim.firstPage = 0;
+    }
+    return opened;
 }
 
 LevelMessages::Cues LevelMessages::step(s32 ticks, u32 accepted) {

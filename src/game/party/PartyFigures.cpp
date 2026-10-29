@@ -34,11 +34,16 @@ const Texture* skinTexture(RenderDevice& device, ItemArchive& archive, std::stri
     }
 }
 
-/** Only the exiting player sinks (do_players case 4); a teammate can still be dying. */
+/** Only standing survivors depart; a teammate can still be dying. Imported
+ * levels may replace GDL's sinking spin without moving gameplay/collision. */
 Mat4 departurePlacement(const PlayerRuntime& runtime, const PortalDeparture& departure,
-                        f32 frameBlend) {
+                        f32 frameBlend, const ImportedLevel* imported) {
+    const auto native = imported ? imported->departure(frameBlend) : std::nullopt;
     const Mat4 body = runtime.capture.body().value_or(
-        PartyFigures::presentationBody(runtime, departure.started() ? 1.0f : frameBlend));
+        PartyFigures::presentationBody(runtime, departure.started() || native ? 1.0f : frameBlend));
+    if (native && runtime.life == PlayerLife::Standing) {
+        return glm::scale(portable::rotate(body, native->yaw, Vec3{0, 1, 0}), Vec3{native->scale});
+    }
     return runtime.life == PlayerLife::Standing ? departure.transform(body) : body;
 }
 
@@ -99,7 +104,13 @@ void PartyFigures::clear() {
 }
 
 const Texture* PartyFigures::skinOf(const PlayerRuntime& runtime, const PowerupEffects& worn,
-                                    const PortalDeparture& departure) const {
+                                    const PortalDeparture& departure,
+                                    const ImportedLevel* imported) const {
+    if (runtime.life == PlayerLife::Standing && imported) {
+        if (const auto native = imported->departure()) {
+            return native->skin;
+        }
+    }
     if (runtime.life == PlayerLife::Standing && departure.started()) {
         return departure.skin();
     }
@@ -128,8 +139,11 @@ std::string_view PartyFigures::shieldObjectOf(u32 armor) {
 }
 
 bool PartyFigures::shown(const PlayerRuntime& runtime, const Scene& scene) {
+    const auto* imported = scene.world.imported();
+    const auto native = imported ? imported->departure(scene.frameBlend) : std::nullopt;
+    const bool finished = native ? native->finished : scene.departure.finished();
     return runtime.figure != nullptr && runtime.life != PlayerLife::InTower &&
-           (runtime.life != PlayerLife::Standing || !scene.departure.finished());
+           (runtime.life != PlayerLife::Standing || !finished);
 }
 
 f32 PartyFigures::alphaOf(const PlayerRuntime& runtime, const PowerupEffects& worn) {
@@ -154,9 +168,9 @@ void PartyFigures::draw(RenderDevice& device, std::span<const PlayerRuntime> pla
             continue;
         }
         const Mat4 body = PlayerFigure::bodyPlacement(
-            departurePlacement(runtime, scene.departure, scene.frameBlend), runtime.actor.save(),
-            worn);
-        figure.setSkinTexture(skinOf(runtime, worn, scene.departure));
+            departurePlacement(runtime, scene.departure, scene.frameBlend, world.imported()),
+            runtime.actor.save(), worn);
+        figure.setSkinTexture(skinOf(runtime, worn, scene.departure, world.imported()));
         figure.setWeaponPowerups(device, world.powerups(), scene.weapons, worn);
         // On the second hand: the left gauntlet, else a shield (PlayerProcessPowerups).
         if ((worn.special & powerup::kLeftGauntlet) != 0) {
@@ -189,8 +203,8 @@ void PartyFigures::drawEffects(RenderDevice& device, std::span<const PlayerRunti
         }
         const auto worn = PowerupEffects::of(runtime.actor.save().progress().inventory);
         const Mat4 body = PlayerFigure::bodyPlacement(
-            departurePlacement(runtime, scene.departure, scene.frameBlend), runtime.actor.save(),
-            worn);
+            departurePlacement(runtime, scene.departure, scene.frameBlend, scene.world.imported()),
+            runtime.actor.save(), worn);
         runtime.figure->drawCompanions(
             device, clip, body, runtime.glow.apply(scene.world.lighting()), alphaOf(runtime, worn),
             &camera, presentationBlend(runtime, scene.frameBlend), TreeModel::Pass::Effects);
@@ -233,14 +247,16 @@ std::optional<PartyFigures::Shadow> PartyFigures::shadowOf(const PlayerRuntime& 
                                                            const LevelWorld& world,
                                                            const PortalDeparture& departure,
                                                            f32 frameBlend) {
+    const auto* imported = world.imported();
+    const auto native = imported ? imported->departure(frameBlend) : std::nullopt;
+    const bool finished = native ? native->finished : departure.finished();
     if (!world.ref().playerShadows() || runtime.figure == nullptr ||
-        runtime.life == PlayerLife::InTower ||
-        (runtime.life == PlayerLife::Standing && departure.finished())) {
+        runtime.life == PlayerLife::InTower || (runtime.life == PlayerLife::Standing && finished)) {
         return std::nullopt;
     }
     // Probe the actual host floor, including moving platforms and slopes, even while
     // the body is thrown or sinking. A guest's unloaded trigger state cannot supply it.
-    const Vec3 feet{departurePlacement(runtime, departure, frameBlend)[3]};
+    const Vec3 feet{departurePlacement(runtime, departure, frameBlend, imported)[3]};
     if (const auto floor = world.collision().floorAt(feet, kShadowReach, kShadowDrop)) {
         const auto worn = PowerupEffects::of(runtime.actor.save().progress().inventory);
         return Shadow{{feet.x, floor->y, feet.z}, floor->normal, alphaOf(runtime, worn)};

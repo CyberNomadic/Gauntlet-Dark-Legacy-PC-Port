@@ -14,6 +14,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/GcTexture.h"
 
@@ -27,6 +28,39 @@ constexpr u32 kNoPictureFlag = 0x100;
 constexpr std::string_view kManifestName = "textures.json";
 
 } // namespace
+
+TextureSet TextureSet::fromDecoded(std::vector<TextureSetEntry> entries,
+                                   std::vector<Image> images) {
+    if (entries.size() != images.size()) {
+        throw FormatError("decoded texture metadata and image counts differ");
+    }
+    TextureSet result;
+    for (usize i = 0; i < entries.size(); ++i) {
+        auto& entry = entries[i];
+        const auto& image = images[i];
+        entry.name = normalizeAssetName(entry.name);
+        entry.file.clear();
+        if (image.pixels.empty()) {
+            if (!entry.external() && !entry.noPicture) {
+                throw FormatError("decoded texture is missing its pixels: " + entry.name);
+            }
+        } else if (image.width == 0 || image.height == 0 || image.width != entry.width ||
+                   image.height != entry.height ||
+                   u64{image.width} * image.height * 4 != image.pixels.size()) {
+            throw FormatError("invalid decoded texture dimensions");
+        }
+        if (!entry.name.empty()) {
+            result.m_byName.try_emplace(entry.name, static_cast<u32>(i));
+        }
+    }
+    result.m_entries = std::move(entries);
+    result.m_images = std::move(images);
+    result.m_textures.resize(result.m_entries.size());
+    result.m_silhouettes.resize(result.m_entries.size());
+    result.m_silhouetteKnown.assign(result.m_entries.size(), true);
+    result.m_silhouetteTextures.resize(result.m_entries.size());
+    return result;
+}
 
 bool TextureSet::load(const std::filesystem::path& directory) {
     releaseTextures();
@@ -50,7 +84,7 @@ bool TextureSet::load(const std::filesystem::path& directory) {
     try {
         bytes = readFile(manifest);
     } catch (const std::exception& e) {
-        log::warn("Texture set {}: {}", manifest.string(), e.what());
+        log::warn("Texture set {}: {}", paths::utf8(manifest), e.what());
         return false;
     }
 
@@ -82,7 +116,7 @@ bool TextureSet::load(const std::filesystem::path& directory) {
             }
         }
     } catch (const std::exception& e) {
-        log::warn("Texture set {}: {}", manifest.string(), e.what());
+        log::warn("Texture set {}: {}", paths::utf8(manifest), e.what());
         m_entries.clear();
         m_byName.clear();
         return false;
@@ -114,11 +148,14 @@ const Image& TextureSet::image(u32 index) {
         // texture's, filled from frames kept elsewhere): those are clear, so that what wears
         // them is unseen rather than the whole model failing.
         if (!m_entries[index].noPicture) {
+            // An external slot has no picture of its own in a native archive or a decoded
+            // set; the unpacked JSON path still names a file for it, loaded as before.
+            if (m_entries[index].external() &&
+                (!m_nativeBitmaps.empty() || m_entries[index].file.empty())) {
+                throw FileError("external texture requires its owning archive: " +
+                                m_entries[index].name);
+            }
             if (!m_nativeBitmaps.empty()) {
-                if (m_entries[index].external()) {
-                    throw FileError("external texture requires its owning archive: " +
-                                    m_entries[index].name);
-                }
                 image = formats::decodeGcTexture(m_nativeBitmaps[index], m_nativePixels);
                 image.bleedIntoTransparent();
             } else {
@@ -253,7 +290,7 @@ bool TextureSet::loadNative(const std::filesystem::path& directory,
         m_textures.resize(m_entries.size());
         return !m_entries.empty();
     } catch (const std::exception& e) {
-        log::warn("Native texture set {}: {}", objects.string(), e.what());
+        log::warn("Native texture set {}: {}", paths::utf8(objects), e.what());
         m_entries.clear();
         m_byName.clear();
         m_nativeBitmaps.clear();

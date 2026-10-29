@@ -1458,4 +1458,94 @@ TEST_CASE("lying pickups spin round without a pause and flip-books turn every pa
     CHECK(most < least * 3.0f);
 }
 
+
+TEST_CASE("the tower's gem halos composite over the rune strips and trees sorted before them",
+          "[placed-items][pickup-occlusion][gem-glow][assets]") {
+    const auto root =
+        test::assetOrSkip("LEVELS/LEVELL1/WORLDS.PS2").parent_path().parent_path().parent_path();
+    test::assetOrSkip("POWERUPS/ANIM.PS2");
+    test::FakeRenderDevice device;
+    LevelWorld world;
+    REQUIRE(world.load(device, root));
+    world.placedItems().setPlayerCount(1);
+    const PlacedItems& items = world.placedItems();
+    usize gem = items.size();
+    for (usize i = 0; i < items.size(); ++i) {
+        if (items.item(i).name == "GEMORANGE" && items.item(i).visible) {
+            gem = i;
+            break;
+        }
+    }
+    REQUIRE(gem < items.size());
+    const auto& item = items.item(gem);
+    REQUIRE(item.figure);
+    world.placedItems().draw(device, Mat4{1}, {});
+    // The gem's crystal and halo are flagged sorted behind, additive, without depth
+    // writes: the parts the original draws after every ordinary sorted object.
+    device.draws.clear();
+    item.model->draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1.0f,
+                     TreeModel::Pass::BlendedBehind);
+    std::vector<const Texture*> behindTextures;
+    for (const auto& draw : device.draws) {
+        behindTextures.push_back(draw.texture);
+        CHECK_FALSE(draw.state.depthWrite);
+        CHECK(draw.state.blend == BlendMode::Additive);
+    }
+    REQUIRE_FALSE(behindTextures.empty());
+    device.draws.clear();
+    item.model->draw(device, Mat4{1}, item.transform, {}, item.pose.matrices(), nullptr, 1.0f,
+                     TreeModel::Pass::BlendedAhead);
+    for (const auto& draw : device.draws) {
+        CHECK(std::ranges::find(behindTextures, draw.texture) == behindTextures.end());
+    }
+    // The rune strips lying on the floor (SUNBEAMS+6, DRAGONBODY2) wear alpha and are veils;
+    // the town tree is a sorted object with an alpha-textured mesh. All three draw after
+    // the pickups' ordinary blended parts and before the halos.
+    std::vector<const Texture*> sceneryTextures;
+    for (const auto* name : {"L1LINE148", "L1LINE154", "L1XLTOWNTREE00"}) {
+        const auto model = world.models().find(name);
+        REQUIRE(model.has_value());
+        for (const auto& part : world.models().mesh(*model).parts) {
+            sceneryTextures.push_back(&world.textures().texture(device, part.texture));
+        }
+    }
+    REQUIRE_FALSE(sceneryTextures.empty());
+    device.draws.clear();
+    const WorldCamera camera{.position = item.position + Vec3{0, 20, 30}};
+    world.draw(device, Mat4{1}, camera);
+    usize lastScenery = 0;
+    usize firstHalo = device.draws.size();
+    usize halos = 0;
+    for (usize i = 0; i < device.draws.size(); ++i) {
+        const auto& draw = device.draws[i];
+        if (std::ranges::find(sceneryTextures, draw.texture) != sceneryTextures.end()) {
+            lastScenery = i;
+        }
+        if (std::ranges::find(behindTextures, draw.texture) != behindTextures.end() &&
+            !draw.state.depthWrite) {
+            firstHalo = std::min(firstHalo, i);
+            ++halos;
+            CHECK(draw.state.depthTest);
+        }
+    }
+    REQUIRE(halos > 0);
+    CHECK(firstHalo > lastScenery);
+    // The rune strips lie on the floor: decals, drawn with the solids before the pickups,
+    // so a gem's shadow blends over them instead of cutting a hole where it wrote depth.
+    std::vector<const Texture*> stripTextures;
+    for (const auto* name : {"L1LINE148", "L1LINE154"}) {
+        const auto model = world.models().find(name);
+        REQUIRE(model.has_value());
+        for (const auto& part : world.models().mesh(*model).parts) {
+            stripTextures.push_back(&world.textures().texture(device, part.texture));
+        }
+    }
+    device.draws.clear();
+    world.scene().drawOpaque(device, Mat4{1}, CameraFrame::of(camera));
+    for (const Texture* strip : stripTextures) {
+        CHECK(std::ranges::any_of(device.draws,
+                                  [&](const auto& draw) { return draw.texture == strip; }));
+    }
+}
+
 } // namespace

@@ -10,7 +10,7 @@
 
 #include "game/characters/Progression.h"
 #include "game/players/NoclipMotion.h"
-#include "game/scenes/ConsoleCommands.h"
+#include "game/console/ConsoleCommands.h"
 
 namespace gdl::game {
 namespace {
@@ -388,6 +388,23 @@ void PlayScene::advanceConsoleFlight(f64 deltaSeconds, const Inputs& inputs) {
                                           : std::nullopt;
         noclipMove(player, offset, yaw);
     }
+}
+
+
+bool PlayScene::pressSwitch(usize index) {
+    return m_open && m_world != nullptr && m_world->pressTrigger(index);
+}
+
+bool PlayScene::unlockGate(usize index) {
+    return m_open && m_fixtures.unlockGate(index);
+}
+
+bool PlayScene::lockGate(usize index) {
+    return m_open && m_fixtures.lockGate(index);
+}
+
+bool PlayScene::setChestLocked(usize index, bool locked) {
+    return m_open && m_fixtures.setChestLocked(index, locked);
 }
 
 } // namespace gdl::game

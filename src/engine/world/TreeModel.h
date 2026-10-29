@@ -28,8 +28,17 @@ namespace gdl {
 class TreeModel {
 public:
     /** DepthWriting/Effects preserve the actor split. Opaque/Blended additionally defer
-     * blended submeshes even when their native material writes depth (pickup shadows). */
-    enum class Pass : u8 { All, DepthWriting, Effects, Opaque, Blended };
+     * blended submeshes even when their native material writes depth (pickup shadows).
+     * Blended splits in two for a pickup standing among scenery: BlendedAhead is its
+     * deferred parts with an ordinary sort key, drawn before the scenery's own deferred
+     * queue; BlendedBehind those the authored flags sort behind (a gem's halo, its crystal),
+     * which the original's lowered key puts after every ordinary sorted object. */
+    enum class Pass : u8 { All, DepthWriting, Effects, Opaque, Blended, BlendedAhead, BlendedBehind };
+    /** Whether a pass composites the figure's particles and bursts: once, with its blended
+     * parts, never again with the parts sorted behind. */
+    static constexpr bool compositesEffects(Pass pass) {
+        return pass != Pass::DepthWriting && pass != Pass::Opaque && pass != Pass::BlendedBehind;
+    }
     /** World-bound shots must test the already-rendered solid scene, including
      * halo nodes whose authored flags otherwise disable the depth test. */
     enum class Occlusion : u8 { Authored, SolidWorld };
@@ -181,6 +190,7 @@ private:
         bool depthTest = true;
         bool sorted = false;          ///< eligible for deferral (flag 0x800)
         bool deferAlways = false;     ///< a glow or sort-behind node: deferred while sorted
+        bool behind = false;          ///< a lowered sort key: after the ordinary deferred
         u32 facing = 0;               ///< turned to the camera this way, when given one
         std::vector<FrameRun> runs;   ///< an object node's, one per sequence
         std::vector<usize> ancestors; ///< includes this node, then its parents

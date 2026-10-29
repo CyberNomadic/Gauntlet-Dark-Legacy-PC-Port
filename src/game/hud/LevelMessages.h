@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 
 #include "engine/assets/BitmapFont.h"
 #include "engine/assets/MessageTable.h"
@@ -60,6 +61,9 @@ public:
     /** With no page, shows the whole message (the welcome); otherwise just that page. */
     bool open(RenderDevice& device, std::string_view name, const StringTable* strings,
               std::optional<usize> page = std::nullopt);
+    /** Imported native prose uses this scroll UI without borrowing GC message IDs. */
+    bool openImported(RenderDevice& device, std::span<const std::string> text,
+                      const StringTable* strings);
     /** Requests audio at the start/end of dismissal, never on ordinary page turns. */
     Cues step(s32 ticks, u32 accepted);
     void prepare(RenderDevice& device) { m_scroll.prepare(device); }

@@ -3,6 +3,7 @@
 #include <deque>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -38,8 +39,13 @@ public:
 
     const MovieInfo& info() const { return m_info; }
 
-    /** Advances by `deltaSeconds`; returns false once the movie is over. */
-    bool update(f64 deltaSeconds);
+    /** Advances the movie; returns false once it is over. The first call starts its clock
+     * without advancing it, as the original's first update primes the sound and no more, so
+     * the time a level took to load never puts the picture ahead. `audioSeconds`, when given,
+     * is how much of the movie's sound the mixer has played: while that advances the picture
+     * keeps to it; when it does not (no sound device, the sound finished) the picture runs on
+     * `deltaSeconds`, up to a quarter second a call. */
+    bool update(f64 deltaSeconds, std::optional<f64> audioSeconds = std::nullopt);
 
     /** True when the last update() decoded at least one new frame. */
     bool frameChanged() const { return m_frameChanged; }
@@ -73,7 +79,9 @@ private:
     std::vector<f32> m_audio;
     f64 m_audioQueuedSeconds = 0.0;
     f64 m_playTime = 0.0;
+    f64 m_audioClock = 0.0; ///< the sound's clock as last followed
     u32 m_decodedFrames = 0;
+    bool m_primed = false; ///< the first update has started the clock
     bool m_frameChanged = false;
     bool m_endOfStream = false;
     bool m_reportedDecodeError = false;

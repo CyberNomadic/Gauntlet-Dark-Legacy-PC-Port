@@ -48,6 +48,13 @@ set(GDL_DATA_DIR "${CMAKE_SOURCE_DIR}/data" CACHE PATH
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(GdlCompilerOptions)
 include(GdlShaders)
+option(GDL_LEGENDS_AUDIO
+    "Sequence Gauntlet Legends N64 music natively (fetches amuse, fmt and nowide at configure time)"
+    ON)
+if(GDL_LEGENDS_AUDIO)
+    include(GdlLegendsAudio)
+    gdl_add_legends_audio()
+endif()
 
 add_subdirectory(src/engine)
 add_subdirectory(src/formats)

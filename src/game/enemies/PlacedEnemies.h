@@ -49,6 +49,8 @@ public:
     void bind(std::vector<Placement> roster, const WorldCollision* collision = nullptr);
     void clear();
     void observe(std::optional<ViewVolume> view, const Vec3& attention);
+    /** What the party's cameras take in together, under solo cameras. */
+    void observeSet(const std::optional<ViewSet>& views);
     bool inView(const Vec3& position, f32 radius) const;
     usize count() const { return m_sim.pending.size(); }
     std::span<const Placement> roster() const { return m_roster; }
@@ -67,16 +69,11 @@ private:
     const WorldCollision* m_collision = nullptr; ///< the floors the records ride
     struct Simulation {
         std::vector<usize> pending;
-        std::optional<ViewVolume> view;
-        Vec3 attention{0};
+        std::optional<ViewSet> view; ///< the cameras and the points they look at
         friend void visitNativeState(NativeStateDigest& digest, const Simulation& state) {
-            const auto& [pending, view, attention] = state;
+            const auto& [pending, view] = state;
             digest.value(pending);
-            digest.flag(view.has_value());
-            if (view) {
-                digest.fields<8>(*view);
-            }
-            digest.value(attention);
+            digest.value(view);
         }
     };
 

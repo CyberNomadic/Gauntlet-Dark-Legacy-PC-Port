@@ -54,6 +54,25 @@ TEST_CASE("arrow effects align with sloping travel and use the view direction fo
     REQUIRE(near(glm::length(Vec3{parallel[1]}), 3));
 }
 
+TEST_CASE("decoded projected-yaw billboards use view depth without changing retail facing modes",
+          "[world][camera][legends]") {
+    WorldCamera view;
+    view.position = {0, 10, -10};
+    view.pitch = kPi / 4;
+    const auto camera = CameraFrame::of(view);
+    const Mat4 authored = glm::translate(Mat4{1}, Vec3{5, 0, 0});
+    const auto projected = camera.face(authored, CameraFrame::kFacingProjectedYaw);
+    CHECK(near(projected[2].x, -1.0f / 3));
+    CHECK(near(projected[2].z, -std::sqrt(8.0f) / 3));
+    CHECK(projected[1] == authored[1]);
+    CHECK(projected[3] == authored[3]);
+    const auto upright = camera.face(authored, 1);
+    CHECK(near(upright[2].x, -1.0f / std::sqrt(5.0f)));
+    CHECK_FALSE(near(upright[2].x, projected[2].x));
+    CHECK(CameraFrame::facingOf(CameraFrame::kFacingProjectedYaw << 24) ==
+          CameraFrame::kFacingProjectedYaw);
+}
+
 TEST_CASE("billboards retain animated size while replacing orientation", "[world][camera]") {
     const CameraFrame camera = CameraFrame::at({5, 10, -20});
     for (const u32 mode : {1U, CameraFrame::kFacingFull}) {

@@ -14,8 +14,13 @@ namespace {
 constexpr s32 kGraphicsCode = 4;
 constexpr s32 kLanguageCode = 5;
 constexpr s32 kAggressorModeCode = 6;
-constexpr s32 kVideoRows = 10;
+constexpr s32 kDisplayCode = 13;
+constexpr s32 kRendererCode = 14;
+constexpr s32 kVideoRows = 12;
 constexpr s32 kAudioSliders = 3;
+/** Where a notice stands under the Audio sliders and the Video action row. */
+constexpr s32 kLowNoticeY = 348;
+constexpr s32 kNoticeY = 276;
 constexpr s32 kAudioX = 160;
 constexpr f32 kAudioScale = 0.7f;
 constexpr std::array<u32, 3> kFrameRates{30, 60, 0};
@@ -53,11 +58,12 @@ void SettingsMenu::open(const GameConfig& config, const StringTable* strings, Pe
                         const TextPainter& painter, const MenuScreen& screen,
                         MenuDefinition backdrop, Scope scope, PreviewAudio preview,
                         DisplayOptions display, std::function<DisplayOptions()> queryDisplay,
-                        Persist previewVideo, VideoSettings::Clock clock) {
+                        Persist previewVideo, VideoSettings::Clock clock, GraphicsApi renderer) {
     if (!m_video.revert()) {
         return;
     }
     m_config = config;
+    m_renderer = renderer;
     m_strings = strings;
     m_persist = std::move(persist);
     m_previewAudio = std::move(preview);
@@ -85,6 +91,13 @@ void SettingsMenu::close() {
         m_confirmVideo = false;
         m_menu.close();
     }
+}
+s32 SettingsMenu::shownMonitor() const {
+    const auto count = static_cast<s32>(m_display.monitors.size());
+    if (m_config.display.monitor >= 0 && m_config.display.monitor < count) {
+        return m_config.display.monitor;
+    }
+    return std::clamp(m_display.monitor, 0, std::max(0, count - 1));
 }
 std::vector<Extent2D> SettingsMenu::resolutions() const {
     auto result = m_display.resolutions;
@@ -132,9 +145,9 @@ void SettingsMenu::rebuild(s32 selection) {
         constexpr s32 kLeft = 64;
         constexpr s32 kRight = 448;
         constexpr s32 kColumnGap = 28;
-        constexpr s32 kRowTop = 100;
-        constexpr s32 kRowStep = 18;
-        constexpr s32 kActionY = 300;
+        constexpr s32 kRowTop = 104; ///< under the title's cell; twelve rows to the actions
+        constexpr s32 kRowStep = 16;
+        constexpr s32 kActionY = 316;
         constexpr s32 kActionGap = 24;
         if (m_confirmVideo) {
             m_countdown = m_video.remaining();
@@ -152,6 +165,12 @@ void SettingsMenu::rebuild(s32 selection) {
             const auto choice = [&](std::string label, std::string value, s32 code) {
                 rows.value(std::move(label), code, std::move(value));
             };
+            // The renderer is chosen from the title alone, the one drawing a level not being
+            // swappable under it; the choice takes effect when the game is next started.
+            const bool openGl = m_config.display.renderer == GraphicsApi::OpenGl;
+            choice(text("settings.renderer"), text(openGl ? "settings.opengl" : "settings.vulkan"),
+                   kRendererCode);
+            definition.items.back().enabled = m_scope == Scope::Title;
             choice(text("settings.vsync"),
                    text(m_config.display.vsync ? "settings.on" : "settings.off"), 0);
             const auto rate = m_config.timing.gameplayFrameRate;
@@ -182,12 +201,19 @@ void SettingsMenu::rebuild(s32 selection) {
             }
             choice(text("settings.windowMode"), text(modeLabel), 4);
             definition.items.back().enabled = !m_display.desktop.isZero();
+            // The display, counted as the platform lists them; one alone offers no choice.
+            choice(text("settings.display"), std::to_string(shownMonitor() + 1), kDisplayCode);
+            definition.items.back().enabled = m_display.monitors.size() > 1;
+            // Scene post-processing is the Vulkan device's alone.
             choice(text("settings.depthOfField"),
                    text(m_config.display.depthOfField ? "settings.on" : "settings.off"), 8);
+            definition.items.back().enabled = !openGl;
             choice(text("settings.bloom"),
                    text(m_config.display.bloom ? "settings.on" : "settings.off"), 9);
+            definition.items.back().enabled = !openGl;
             choice(text("settings.ambientOcclusion"),
                    text(m_config.display.ambientOcclusion ? "settings.on" : "settings.off"), 10);
+            definition.items.back().enabled = !openGl;
             const auto filterIndex = static_cast<usize>(
                 std::ranges::find(kTextureFiltering, m_config.display.textureFiltering) -
                 kTextureFiltering.begin());
@@ -204,7 +230,8 @@ void SettingsMenu::rebuild(s32 selection) {
             // Budget all choices, not just the current value, so cycling never resizes the font.
             for (const auto* id :
                  {"settings.borderless", "settings.fullscreen", "settings.windowed", "settings.on",
-                  "settings.off", "settings.unlimited", "settings.msaa2", "settings.msaa4"}) {
+                  "settings.off", "settings.unlimited", "settings.msaa2", "settings.msaa4",
+                  "settings.vulkan", "settings.opengl"}) {
                 valueWidth = std::max(valueWidth, m_painter->measure(text(id), 1));
             }
             const auto measureSize = [&](Extent2D extent) {
@@ -216,6 +243,8 @@ void SettingsMenu::rebuild(s32 selection) {
             for (const auto id : kTextureLabels) {
                 valueWidth = std::max(valueWidth, m_painter->measure(text(id), 1));
             }
+            valueWidth = std::max(valueWidth,
+                                  m_painter->measure(std::to_string(m_display.monitors.size()), 1));
             for (const auto extent : m_display.resolutions) {
                 measureSize(extent);
             }
@@ -229,10 +258,9 @@ void SettingsMenu::rebuild(s32 selection) {
                 std::min(0.7f, static_cast<f32>(kRight - kLeft - kColumnGap - kArrowMargin) /
                                    static_cast<f32>(std::max(1, labelWidth + valueWidth)));
             const s32 actionWidth = m_painter->measure(text("settings.apply"), 1) +
-                                    m_painter->measure(text("settings.defaults"), 1) +
-                                    m_painter->measure(text("settings.back"), 1);
+                                    m_painter->measure(text("settings.defaults"), 1);
             definition.scale =
-                std::min(definition.scale, static_cast<f32>(kRight - kLeft - 2 * kActionGap) /
+                std::min(definition.scale, static_cast<f32>(kRight - kLeft - kActionGap) /
                                                static_cast<f32>(std::max(1, actionWidth)));
             definition.valueX = kLeft +
                                 static_cast<s32>(static_cast<f32>(labelWidth) * definition.scale) +
@@ -245,7 +273,6 @@ void SettingsMenu::rebuild(s32 selection) {
             }
             add(text("settings.apply"), 5);
             add(text("settings.defaults"), 6);
-            add(text("settings.back"), 7);
         }
         const usize firstAction = definition.itemPositions.size();
         s32 totalWidth = 0;
@@ -329,7 +356,13 @@ void SettingsMenu::rebuild(s32 selection) {
         rows.marked(text("settings.show"), 1, m_config.camera.compass);
         break;
     }
-    m_menu.open(definition, *m_painter, m_screen, selection);
+    // A page written again (a row toggled, a key captured) keeps its window where it was;
+    // another page, or another player's controls, starts at the top.
+    const s32 windowKey =
+        static_cast<s32>(m_page) * 8 + (m_page == Page::Controls ? m_controls.player() + 1 : 0);
+    const s32 scroll = m_menu.isOpen() && windowKey == m_windowKey ? m_menu.scroll() : 0;
+    m_windowKey = windowKey;
+    m_menu.open(definition, *m_painter, m_screen, selection, scroll);
 }
 bool SettingsMenu::flushAudio() {
     if (!m_audioDirty) {
@@ -420,6 +453,17 @@ void SettingsMenu::change(s32 direction) {
                 cycleChoice(kTextureFiltering, next.display.textureFiltering, direction);
         } else if (code == 12) {
             next.display.smoothSprites = !next.display.smoothSprites;
+        } else if (code == kRendererCode) {
+            if (m_scope != Scope::Title) {
+                return;
+            }
+            next.display.renderer = otherGraphicsApi(next.display.renderer);
+        } else if (code == kDisplayCode) {
+            const auto count = static_cast<s32>(m_display.monitors.size());
+            if (count < 2) {
+                return;
+            }
+            next.display.monitor = (shownMonitor() + direction + count) % count;
         } else if (code == 4) {
             if (m_display.desktop.isZero()) {
                 return;
@@ -537,7 +581,7 @@ MenuEvent SettingsMenu::update(const MenuInput& input, s32 ticks) {
     if (m_page == Page::Graphics && !m_menu.closing() && (input.left || input.right)) {
         const auto selected = m_menu.selection();
         if (selected >= kVideoRows) {
-            rebuild(kVideoRows + (selected - kVideoRows + (input.left ? -1 : 1) + 3) % 3);
+            rebuild(kVideoRows + (selected - kVideoRows + (input.left ? -1 : 1) + 2) % 2);
         } else {
             change(input.left ? -1 : 1);
         }
@@ -600,7 +644,11 @@ MenuEvent SettingsMenu::update(const MenuInput& input, s32 ticks) {
             m_notice = m_confirmVideo ? "" : text("settings.failed");
             rebuild(m_confirmVideo ? 1 : kVideoRows);
         } else if (code == 6) {
+            // Restore Defaults stages the shipped video settings for Apply.
             const GameConfig defaults;
+            if (m_scope == Scope::Title) {
+                m_config.display.renderer = defaults.display.renderer;
+            }
             m_config.display.vsync = defaults.display.vsync;
             m_config.display.depthOfField = defaults.display.depthOfField;
             m_config.display.bloom = defaults.display.bloom;
@@ -614,14 +662,10 @@ MenuEvent SettingsMenu::update(const MenuInput& input, s32 ticks) {
             m_config.display.maxFrameRate = defaults.display.maxFrameRate;
             m_config.timing.gameplayFrameRate = defaults.timing.gameplayFrameRate;
             rebuild(kVideoRows + 1);
-        } else if (code == 7) {
-            event.action = MenuAction::Back;
         } else if (event.direction != 0) {
             change(event.direction);
         }
-        if (code != 7) {
-            return {};
-        }
+        return {};
     }
     if (event.action == MenuAction::Back) {
         if (m_page == Page::Graphics) {
@@ -736,9 +780,13 @@ void SettingsMenu::draw(Canvas& canvas, const TextPainter& painter,
     TextStyle style;
     style.scale = 0.5f;
     style.color = m_menu.definition().colors.off;
-    if (!m_notice.empty()) {
-        painter.draw(canvas, -m_screen.width / 2, m_page == Page::Audio ? 348 : 276, m_notice,
-                     style);
+    std::string notice = m_notice;
+    if (notice.empty() && m_page == Page::Graphics && !m_confirmVideo && restartNeeded()) {
+        notice = text("settings.rendererRestart");
+    }
+    if (!notice.empty()) {
+        const bool low = m_page == Page::Audio || m_page == Page::Graphics;
+        painter.draw(canvas, -m_screen.width / 2, low ? kLowNoticeY : kNoticeY, notice, style);
     }
 }
 } // namespace gdl::game

@@ -75,6 +75,11 @@ f64 AudioStream::queuedSeconds() const {
     return static_cast<f64>(queuedFramesLocked()) / m_desc.sampleRate;
 }
 
+f64 AudioStream::playedSeconds() const {
+    const std::scoped_lock lock(m_mutex);
+    return static_cast<f64>(m_playedFrames) / m_desc.sampleRate;
+}
+
 void AudioStream::setVolume(f32 volume) {
     const std::scoped_lock lock(m_mutex);
     m_volume = std::clamp(volume, 0.0f, 1.0f);
@@ -149,6 +154,7 @@ void AudioStream::mixInto(std::span<f32> stereoOut) {
         while (m_fraction >= 1.0) {
             m_fraction -= 1.0;
             ++m_readFrame;
+            ++m_playedFrames;
         }
     }
     compactLocked();

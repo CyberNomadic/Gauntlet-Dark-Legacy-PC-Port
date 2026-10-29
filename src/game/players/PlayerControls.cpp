@@ -232,6 +232,13 @@ void PlayerControlReader::MagicGesture::apply(PlayButtons& buttons, bool down, b
 PlayButtons PlayerControlReader::read(const Input& input, const PlayBindings& b, bool keyboard,
                                       s32 pad, f32 seconds) {
     PlayButtons out = deviceButtons(input, b, keyboard, kNoPad);
+    if (keyboard && b.keyboardMagicGestures) {
+        const bool down = bound(input, b.usePotion, {}, true, kNoPad, false);
+        const bool pressed = bound(input, b.usePotion, {}, true, kNoPad, true);
+        m_keyboardMagic.apply(out, down, pressed, seconds, b);
+    } else {
+        m_keyboardMagic = {};
+    }
     for (s32 i = 0; i < Input::kMaxPads; ++i) {
         if ((pad != i && pad != kAllPads) || !input.isPadConnected(i)) {
             m_magic[static_cast<usize>(i)] = {};
@@ -252,6 +259,7 @@ PlayButtons PlayerControlReader::read(const Input& input, const PlayBindings& b,
 
 void PlayerControlReader::reset() {
     m_magic = {};
+    m_keyboardMagic = {};
 }
 
 } // namespace gdl::game

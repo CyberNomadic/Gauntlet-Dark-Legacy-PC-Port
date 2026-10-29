@@ -1,13 +1,39 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <optional>
+#include <string_view>
 
 #include "engine/core/SpecialMembers.h"
 #include "engine/core/Types.h"
 #include "engine/math/Math.h"
 
 namespace gdl {
+
+/** The graphics API a frame is drawn with. */
+enum class GraphicsApi : u8 { Vulkan, OpenGl };
+
+/** The APIs' names in the settings, in enum order. */
+inline constexpr std::array<std::string_view, 2> kGraphicsApiNames{"vulkan", "opengl"};
+
+constexpr std::string_view graphicsApiName(GraphicsApi api) {
+    return kGraphicsApiNames[static_cast<usize>(api)];
+}
+
+constexpr std::optional<GraphicsApi> parseGraphicsApi(std::string_view name) {
+    for (usize i = 0; i < kGraphicsApiNames.size(); ++i) {
+        if (kGraphicsApiNames[i] == name) {
+            return static_cast<GraphicsApi>(i);
+        }
+    }
+    return std::nullopt;
+}
+
+/** The API stood in when `api` cannot start on this machine. */
+constexpr GraphicsApi otherGraphicsApi(GraphicsApi api) {
+    return api == GraphicsApi::Vulkan ? GraphicsApi::OpenGl : GraphicsApi::Vulkan;
+}
 
 struct Extent2D {
     u32 width = 0;

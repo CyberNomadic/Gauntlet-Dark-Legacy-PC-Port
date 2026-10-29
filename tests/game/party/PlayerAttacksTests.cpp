@@ -233,7 +233,12 @@ TEST_CASE("native turbo volleys retain distinct duplicate-row and catch-up relea
                                                       direction, native[0].speed, native[0].reach,
                                                       native[0].spec->weight)) < 0.0001f);
             CHECK(missile.scale == 1);
-            CHECK(missile.flags == flags);
+            // PlyrSfxDoDamage type 10 passes field_11C & 0xFFB7FFFF to
+            // PlayerStartMissile: the authored volley suppresses only fan bits.
+            CHECK(missile.flags == (flags & 0xFFB7FFFFU));
+            CHECK((missile.flags & (powerup::kThreeWayShot | powerup::kFiveWayShot)) == 0);
+            CHECK((missile.flags & powerup::kRapidFire) == (flags & powerup::kRapidFire));
+            CHECK((missile.flags & 0xFU) == (flags & 0xFU));
             CHECK(observed[index].release == release);
             CHECK(observed[index].handle == played[index].handle);
             CHECK(played[index].bank == cue.bank);
@@ -2280,11 +2285,14 @@ TEST_CASE("Jester turbo damage reaches bosses great creatures and generators",
     const f32 bossHealth = bosses.view().health;
     const f32 golemHealth = critters.healthOf(*golem);
     const f32 generatorHealth = generators.healthOf(0);
-    // Aggressor Mode, the standard, guards the generators from a turbo strike; the
-    // original's rule, out of the mode, lets it through.
+    // Aggressor Mode guards the generators from a turbo strike; the original's rule, the
+    // standard, lets it through.
+    const MechanicsFacade aggressor{{.aggressorMode = true}};
     const MechanicsFacade original{{.aggressorMode = false}};
     bool guarded = true;
-    SECTION("Aggressor Mode guards the generators") {}
+    SECTION("Aggressor Mode guards the generators") {
+        f.targets.mechanics = &aggressor;
+    }
     SECTION("the original's rule lets the strike through") {
         f.targets.mechanics = &original;
         guarded = false;
@@ -6008,6 +6016,8 @@ TEST_CASE("a shot that only hurts does nothing for the run; a shot that kills co
     const auto root =
         test::assetOrSkip("MONSTERS/GRU/ANIM.PS2").parent_path().parent_path().parent_path();
     Fixture f;
+    const MechanicsFacade aggressor{{.aggressorMode = true}};
+    f.targets.mechanics = &aggressor;
     f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
     EnemyScales scales;
     bool kills = false;
@@ -6065,6 +6075,8 @@ TEST_CASE("a turbo strike that kills counts one toward the run of close blows",
        "speedMin":30,"speedMax":30,"maxTime":6,"amount":70,"flags":64,
        "effect":0,"hitEffect":0,"damageType":0}]})");
     Fixture f;
+    const MechanicsFacade aggressor{{.aggressorMode = true}};
+    f.targets.mechanics = &aggressor;
     REQUIRE(f.classes.load(root / "pdata"));
     f.opponents.open({f.device, f.world, f.weapons, f.effects, f.audio, root, 1}, f.players);
     EnemyScales scales;

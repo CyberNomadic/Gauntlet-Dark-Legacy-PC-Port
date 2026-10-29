@@ -13,6 +13,18 @@ namespace {
 
 using namespace gdl;
 
+TEST_CASE("graphics APIs are named for the settings and stand in for each other",
+          "[render][types][renderer]") {
+    STATIC_REQUIRE(graphicsApiName(GraphicsApi::Vulkan) == "vulkan");
+    STATIC_REQUIRE(graphicsApiName(GraphicsApi::OpenGl) == "opengl");
+    STATIC_REQUIRE(parseGraphicsApi("vulkan") == GraphicsApi::Vulkan);
+    STATIC_REQUIRE(parseGraphicsApi("opengl") == GraphicsApi::OpenGl);
+    STATIC_REQUIRE(!parseGraphicsApi("OpenGL").has_value());
+    STATIC_REQUIRE(!parseGraphicsApi("").has_value());
+    STATIC_REQUIRE(otherGraphicsApi(GraphicsApi::Vulkan) == GraphicsApi::OpenGl);
+    STATIC_REQUIRE(otherGraphicsApi(GraphicsApi::OpenGl) == GraphicsApi::Vulkan);
+}
+
 TEST_CASE("Extent2D reports zero when either side is zero", "[render][types]") {
     STATIC_REQUIRE(Extent2D{0, 10}.isZero());
     STATIC_REQUIRE(Extent2D{10, 0}.isZero());

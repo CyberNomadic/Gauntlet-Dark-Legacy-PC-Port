@@ -40,7 +40,7 @@ void visitNativeState(NativeStateDigest& digest, const LevelTrigger& value) {
     digest.fields<26>(value);
 }
 void visitNativeState(NativeStateDigest& digest, const LevelTriggers::Target& value) {
-    digest.fields<18>(value);
+    digest.fields<19>(value);
 }
 
 void LevelTriggers::appendSimulationDigest(NativeStateDigest& digest, const Simulation& state) {
@@ -951,6 +951,15 @@ void LevelTriggers::shoot(usize index) {
     }
 }
 
+bool LevelTriggers::press(usize index) {
+    if (index >= m_sim.triggers.size() || !m_sim.triggers[index].enabled ||
+        m_sim.triggers[index].forced) {
+        return false;
+    }
+    m_sim.triggers[index].shot = true;
+    return true;
+}
+
 void LevelTriggers::openMet(std::span<const TriggerVisitor> visitors, WorldAnimator& animator,
                             WorldScene& scene, WorldCollision* collision) {
     refreshEligibility(m_sim.playerCount >= 0 ? m_sim.playerCount
@@ -1037,6 +1046,12 @@ void LevelTriggers::update(f32 seconds, std::span<const TriggerVisitor> visitors
                    std::ranges::find(target.subtree, static_cast<usize>(floor)) !=
                        target.subtree.end();
         };
+        // A platform that goes clear as it moves cannot move under a player: it waits for
+        // them to step off (did_generate's 2 skips the height step), solid where it stands.
+        target.ridden = target.holdsForRiders() &&
+                        std::ranges::any_of(visitors, [&](const TriggerVisitor& visitor) {
+                            return supported(visitor.floorObject);
+                        });
         const bool momentaryBridge =
             (target.kind & (0x47U | LevelTrigger::kOscillates)) == 0 &&
             (target.kind & LevelTrigger::kFades) != 0;
@@ -1176,6 +1191,9 @@ void LevelTriggers::stepMotion(f32 seconds, WorldScene& scene, WorldCollision* c
     m_sim.frameRemainder -= frames;
     for (Target& target : m_sim.targets) {
         if (!target.animated && (target.kind & LevelTrigger::kFades) == 0) {
+            if (!target.settled && target.ridden) {
+                continue; // held under its riders, as solid as it stands
+            }
             if (!target.settled) {
                 // GameCube items.c ProcessItemWobjs: 4.0 * gClockFrameStep.
                 const f32 goal =
@@ -1244,10 +1262,15 @@ void LevelTriggers::finishMotion(const WorldAnimator& animator, WorldCollision* 
             // ProcessItemWobjs / PlayerNewFloor: active height targets, or animated
             // lifts carrying the whole party, prohibit changing floors until stopped.
             const bool heightTarget = !target.animated && (target.kind & LevelTrigger::kFades) == 0;
-            collision->setFloorExitBlocked(
-                target.object, !target.settled && (heightTarget || target.wholePartyReady));
+            collision->setFloorExitBlocked(target.object,
+                                           !target.settled && !target.ridden &&
+                                               (heightTarget || target.wholePartyReady));
         }
     }
+}
+
+bool LevelTriggers::Target::holdsForRiders() const {
+    return !animated && (kind & (LevelTrigger::kFades | LevelTrigger::kStaysSolid)) == 0;
 }
 
 bool LevelTriggers::Motion::Target::valid() const {

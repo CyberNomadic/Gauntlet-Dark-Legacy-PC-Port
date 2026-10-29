@@ -686,7 +686,7 @@ template <class A, class T> void field(A& a, T& v) {
     } else if constexpr (std::is_same_v<V, TreePose::Checkpoint::Node>) {
         fields(a, v.name, v.parent, v.rest);
     } else if constexpr (std::is_same_v<V, NodePose>) {
-        fields(a, v.rotation, v.position, v.scale, v.pitchYawRoll);
+        fields(a, v.rotation, v.position, v.scale, v.rotationOrder);
     } else {
         static_assert(std::is_same_v<V, void>, "combat checkpoint field lacks an explicit codec");
     }

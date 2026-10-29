@@ -71,7 +71,10 @@ def digest(path):
 
 def public_runtime_files(planned_files, tracked_data):
     """Ship checked-in configuration and reviewed notices, never local game media."""
-    notices = {"data/licenses/lz4.txt": "licenses/lz4.txt"}
+    notices = {
+        f"data/licenses/{name}.txt": f"licenses/{name}.txt"
+        for name in ("lz4", "amuse", "fmt", "boost-nowide")
+    }
     files = []
     for source, destination in planned_files:
         relative = destination.as_posix()

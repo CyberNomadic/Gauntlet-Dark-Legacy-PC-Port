@@ -10,8 +10,9 @@ find_package(Stb REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
 # Shared value types, byte I/O and codecs sit below both the native readers and runtime.
+# Paths sits here with File: every reader names its files in UTF-8 through it.
 add_library(engine_base STATIC
-    core/Log.cpp core/Assert.cpp core/Clock.cpp core/Strings.cpp
+    core/Log.cpp core/Assert.cpp core/Clock.cpp core/Strings.cpp platform/Paths.cpp
     io/File.cpp io/AssetLocator.cpp io/Sha256.cpp render/Image.cpp codec/DspAdpcm.cpp)
 add_library(gdl::engine_base ALIAS engine_base)
 target_include_directories(engine_base PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -46,7 +47,6 @@ add_library(engine STATIC
     platform/Gamepads.h
     platform/Gamepads.cpp
     platform/Paths.h
-    platform/Paths.cpp
     platform/GlfwWindow.h
     platform/GlfwWindow.cpp
     render/RenderTypes.h
@@ -80,6 +80,12 @@ add_library(engine STATIC
     render/vulkan/VulkanTexture.cpp
     render/vulkan/VulkanRenderDevice.h
     render/vulkan/VulkanRenderDevice.cpp
+    render/opengl/OpenGlFunctions.h
+    render/opengl/OpenGlFunctions.cpp
+    render/opengl/OpenGlShaderSource.h
+    render/opengl/OpenGlShaderSource.cpp
+    render/opengl/OpenGlRenderDevice.h
+    render/opengl/OpenGlRenderDevice.cpp
     codec/Lzss.h
     codec/Lzss.cpp
     codec/AviReader.h
@@ -104,6 +110,9 @@ add_library(engine STATIC
     audio/StreamSource.h
     audio/AdsStream.h
     audio/AdsStream.cpp
+    audio/DreamcastStream.h
+    audio/DreamcastStream.cpp
+    audio/N64LegendsStream.h
     audio/MusicDeclicker.cpp
     audio/MusicDeclicker.h
     audio/StreamPlaylist.cpp
@@ -224,6 +233,15 @@ target_compile_definitions(engine
         GDL_ENABLE_VULKAN_VALIDATION=$<BOOL:${GDL_ENABLE_VULKAN_VALIDATION}>)
 
 gdl_apply_compiler_options(engine)
+# The N64 music sequencer needs the fetched amuse sources; without them the stream is a
+# stub that never opens, and the game plays the Legends maps silently.
+if(GDL_LEGENDS_AUDIO)
+    target_sources(engine PRIVATE audio/N64LegendsStream.cpp)
+    target_link_libraries(engine PRIVATE gdl::legends_audio_native)
+    gdl_configure_legends_audio_source(audio/N64LegendsStream.cpp)
+else()
+    target_sources(engine PRIVATE audio/N64LegendsStreamStub.cpp)
+endif()
 set_target_properties(engine PROPERTIES FOLDER "engine")
 
 get_target_property(_engine_sources engine SOURCES)

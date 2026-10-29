@@ -411,7 +411,7 @@ TEST_CASE("world chrome coordinates stay finite for absent and collapsed mesh no
     for (const auto& vertex : device.draws.front().vertices) {
         CHECK(std::isfinite(vertex.uv.x));
         CHECK(std::isfinite(vertex.uv.y));
-        CHECK(vertex.color == mesh.vertices.front().color);
+        CHECK(vertex.color == WorldScene::bakedShade(mesh.vertices.front().color));
         CHECK(vertex.uv == (zeroNormal || collapsed ? Vec2{0.5f} : Vec2{0.5f, 0}));
     }
 }

@@ -233,6 +233,30 @@ TEST_CASE("the application brings up a window and GPU and renders frames", "[gpu
     REQUIRE(app.sawInput());
 }
 
+TEST_CASE("the OpenGL device brings up a window and renders the same frames",
+          "[gpu][app][renderer]") {
+    ApplicationDesc desc;
+    desc.window.title = "gdl OpenGL test";
+    desc.window.width = 320;
+    desc.window.height = 240;
+    desc.renderer = GraphicsApi::OpenGl;
+    desc.maxFrames = 6;
+    desc.maxFrameRate = 60;
+    desc.enableValidation = true;
+    SECTION("single sample") {
+        desc.sampleCount = 1;
+    }
+    SECTION("multisampled") {
+        desc.sampleCount = 4;
+    }
+    ProbeApplication app(std::move(desc));
+    app.mipmaps = true;
+    app.alphaCoverage = true;
+    app.changePresentation = true;
+    REQUIRE(app.run() == 0);
+    CHECK(app.renderedFrames() >= 6);
+}
+
 TEST_CASE("mipmapped draws and uploads survive filtering changes and the post chain",
           "[gpu][app][mipmaps]") {
     ApplicationDesc desc;

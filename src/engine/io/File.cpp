@@ -8,15 +8,23 @@
 
 #include "engine/core/Error.h"
 #include "engine/core/Types.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
 namespace {
 
 std::FILE* openFile(const std::filesystem::path& path, const char* mode) {
-    std::FILE* file = std::fopen(path.string().c_str(), mode);
+#if defined(_WIN32)
+    // By the wide name: a narrow one cannot hold a character beyond the system code page.
+    const std::string_view narrow{mode};
+    const std::wstring wide(narrow.begin(), narrow.end());
+    std::FILE* file = _wfopen(path.c_str(), wide.c_str());
+#else
+    std::FILE* file = std::fopen(path.c_str(), mode);
+#endif
     if (file == nullptr) {
-        throw FileError(std::format("cannot open {}", path.string()));
+        throw FileError(std::format("cannot open {}", paths::utf8(path)));
     }
     return file;
 }
@@ -33,7 +41,7 @@ void writeFile(const std::filesystem::path& path, std::span<const u8> bytes) {
     const usize written = std::fwrite(bytes.data(), 1, bytes.size(), file);
     const s32 closed = std::fclose(file);
     if (written != bytes.size() || closed != 0) {
-        throw FileError(std::format("cannot write {}", path.string()));
+        throw FileError(std::format("cannot write {}", paths::utf8(path)));
     }
 }
 
@@ -63,7 +71,7 @@ void replaceTextFile(const std::filesystem::path& path, std::string_view text) {
     std::error_code cleanup;
     std::filesystem::remove(temporary, cleanup);
     throw FileError(
-        std::format("cannot replace {}{}", path.string(), error ? ": " + error.message() : ""));
+        std::format("cannot replace {}{}", paths::utf8(path), error ? ": " + error.message() : ""));
 }
 
 FileStream::FileStream(const std::filesystem::path& path)
@@ -71,17 +79,17 @@ FileStream::FileStream(const std::filesystem::path& path)
     std::error_code ec;
     const auto size = std::filesystem::file_size(path, ec);
     if (ec) {
-        throw FileError(std::format("cannot size {}: {}", path.string(), ec.message()));
+        throw FileError(std::format("cannot size {}: {}", paths::utf8(path), ec.message()));
     }
     m_size = size;
 }
 
 void FileStream::seek(u64 offset) {
     if (offset > m_size) {
-        throw FileError(std::format("seek past the end of {}", m_path.string()));
+        throw FileError(std::format("seek past the end of {}", paths::utf8(m_path)));
     }
     if (std::fseek(m_file.get(), static_cast<long>(offset), SEEK_SET) != 0) {
-        throw FileError(std::format("seek failed in {}", m_path.string()));
+        throw FileError(std::format("seek failed in {}", paths::utf8(m_path)));
     }
     m_position = offset;
 }
@@ -89,7 +97,7 @@ void FileStream::seek(u64 offset) {
 usize FileStream::read(std::span<u8> out) {
     const usize count = std::fread(out.data(), 1, out.size(), m_file.get());
     if (count != out.size() && std::ferror(m_file.get()) != 0) {
-        throw FileError(std::format("read failed in {}", m_path.string()));
+        throw FileError(std::format("read failed in {}", paths::utf8(m_path)));
     }
     m_position += count;
     return count;
@@ -98,7 +106,7 @@ usize FileStream::read(std::span<u8> out) {
 std::vector<u8> FileStream::readExact(usize count) {
     std::vector<u8> bytes(count);
     if (read(bytes) != count) {
-        throw FileError(std::format("unexpected end of {}", m_path.string()));
+        throw FileError(std::format("unexpected end of {}", paths::utf8(m_path)));
     }
     return bytes;
 }

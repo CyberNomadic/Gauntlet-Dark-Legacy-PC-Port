@@ -249,4 +249,36 @@ void LockedGates::draw(RenderDevice& device, const Mat4& clip, const WorldLighti
     }
 }
 
+
+bool LockedGates::unlock(usize index) {
+    if (index >= m_sim.gates.size()) {
+        return false;
+    }
+    Gate& gate = m_sim.gates[index];
+    if (!gate.shown || gate.state != kShut) {
+        return false;
+    }
+    gate.state = kOpening;
+    gate.openingTicks = 0;
+    gate.box.solid = false;
+    gate.figure.play(kOpening, false);
+    return true;
+}
+
+bool LockedGates::lock(usize index) {
+    if (index >= m_sim.gates.size()) {
+        return false;
+    }
+    Gate& gate = m_sim.gates[index];
+    if (!gate.shown || gate.state == kShut) {
+        return false;
+    }
+    gate.state = kShut;
+    gate.openingTicks = 0;
+    gate.refusalLeft = 0.0f;
+    gate.box.solid = gate.blocksPassage;
+    gate.figure.play(kShut, true);
+    return true;
+}
+
 } // namespace gdl::game

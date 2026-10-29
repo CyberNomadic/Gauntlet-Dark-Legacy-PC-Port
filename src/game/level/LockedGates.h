@@ -77,6 +77,12 @@ public:
     void setPlayerCount(s32 players);
 
     std::vector<GateEvent> update(s32 ticks, f32 seconds, std::span<const ChestVisitor> party);
+    /** The developer console opens a shut gate without a key: it swings open as a key would
+     * have it. False when it is not shut. */
+    bool unlock(usize index);
+    /** The developer console shuts a gate again, barring the way until a key is spent. False
+     * when it is shut already. */
+    bool lock(usize index);
     /** The boxes of the gates that still bar the way. */
     std::vector<Obstacle> obstacles() const;
     /** What stops a shot: a door still shut or swinging (fn_8005F0F4's contact). */

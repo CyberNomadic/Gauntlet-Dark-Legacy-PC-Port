@@ -74,6 +74,9 @@ SimulationObservation::Digest PlayScene::simulationControlDigest() const {
     // hidden camera velocities, RNG, rune cue latches and arbitration clocks.
     control.value(m_sim);
     m_camera.appendNativeDigest(control);
+    for (const TowerCamera& seat : m_seatCameras) {
+        seat.appendNativeDigest(control); // the seats' own cameras, solo or not
+    }
     control.flag(PlayerPowerups::timeStopped(m_players));
     control.flag(m_context.stopTimeTotal != nullptr);
     if (m_context.stopTimeTotal != nullptr) {

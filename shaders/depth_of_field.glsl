@@ -1,16 +1,16 @@
-layout(set = 0, binding = 0) uniform sampler2D scene;
+SAMPLER_2D(0, scene)
 #ifdef MULTISAMPLED_DEPTH
-layout(set = 1, binding = 0) uniform sampler2DMS sceneDepth;
+SAMPLER_2DMS(1, sceneDepth)
 #else
-layout(set = 1, binding = 0) uniform sampler2D sceneDepth;
+SAMPLER_2D(1, sceneDepth)
 #endif
-layout(location = 0) in vec2 uv;
+VARYING(0) in vec2 uv;
 layout(location = 0) out vec4 color;
-layout(push_constant) uniform Blur {
+PUSH_CONSTANTS_BEGIN(Blur)
     mat4 clipToView;
     vec4 focus; // end of sharp range, transition length, radius in pixels, sample count
     vec4 pixel; // reciprocal framebuffer size
-} settings;
+PUSH_CONSTANTS_END(Blur, settings)
 
 float viewDistance(vec2 at) {
     ivec2 size = ivec2(1.0 / settings.pixel.xy + 0.5);

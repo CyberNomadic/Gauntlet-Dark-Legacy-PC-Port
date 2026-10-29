@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "engine/core/Log.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl::game {
 
@@ -75,7 +76,8 @@ SpawnedObjects::Source* SpawnedObjects::sourceOf(const std::filesystem::path& un
     const std::filesystem::path directory = unpackedRoot / level.directory;
     if (!source->layout.load(directory) || !source->models.load(directory) ||
         !source->textures.load(directory)) {
-        log::warn("Spawned objects: {} is not unpacked under {}", level.name, directory.string());
+        log::warn("Spawned objects: {} is not unpacked under {}", level.name,
+                  paths::utf8(directory));
         return nullptr;
     }
     if (!source->items.load(unpackedRoot, level)) {

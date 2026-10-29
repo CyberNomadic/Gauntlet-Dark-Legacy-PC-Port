@@ -381,10 +381,10 @@ TEST_CASE("a world scene places every object that has a mesh and draws it in pas
     const auto& blade = f.device.draws[2];
     REQUIRE(blade.texture == wall.texture);
     REQUIRE(blade.vertices[0].position == Vec3{11.0f, 0.0f, 50.0f});
-    // Lit from above, the upward-facing wall is brighter than the downward-facing window,
-    // which keeps the ambient alone.
-    REQUIRE(wall.vertices[0].color.r > window.vertices[0].color.r);
-    REQUIRE(window.vertices[0].color.r == 140);
+    // Level geometry is never lit by the level's light (every world node is NOSHADING):
+    // without a colour stream the wall and the window are flat, whichever way they face.
+    REQUIRE(wall.vertices[0].color.r == 255);
+    REQUIRE(window.vertices[0].color.r == 255);
     REQUIRE(f.device.draws[4].vertices[0].position == Vec3{10.0f, 0.0f, 100.0f});
     REQUIRE(f.device.draws[5].vertices[0].position == Vec3{10.0f, 0.0f, 60.0f});
     const auto& flame = f.device.draws[6];
@@ -1062,9 +1062,12 @@ TEST_CASE("objects flagged to face the camera are units turned its way", "[world
     REQUIRE(edge.z == Approx(9.0f).margin(1e-5f));
 }
 
-TEST_CASE("a prelit object is shaded by its vertices, not the lights", "[world][scene]") {
+TEST_CASE("a mesh with a colour stream is shaded by its vertices whatever its flags",
+          "[world][scene]") {
     Fixture f("world-scene-prelit");
-    // Two copies of the same dim wall: one flagged prelit, one left to the lights.
+    // Two copies of the same dim wall, one carrying the flag the original never reads: both
+    // show their baked colour, never the level's light (K1's floors lack the flag and are
+    // baked all the same).
     const auto dir = test::scratchDirectory("world-scene-prelit-layout");
     writeTextFile(dir / "world.json", R"({"objects": [
       {"name": "LIT", "position": [0, 0, 0], "next": 1, "flags": 2},
@@ -1076,14 +1079,37 @@ TEST_CASE("a prelit object is shaded by its vertices, not the lights", "[world][
     REQUIRE(f.device.draws.size() == 1); // both share one batch
     const auto& vertices = f.device.draws[0].vertices;
     REQUIRE(vertices.size() == 6);
-    bool dim = false;
-    bool lit = false;
     for (const ImmediateVertex& v : vertices) {
-        dim = dim || v.color.r == 48; // the fixture's 0.2 quantized to native five-bit colour
-        lit = lit || v.color.r > 200; // the lit copy, facing the light
+        // The fixture's 0.2, quantized to five bits (48) and spread so 248 is the whole.
+        CHECK(v.color.r == 49);
     }
-    REQUIRE(dim);
-    REQUIRE(lit);
+}
+
+TEST_CASE("a baked five-bit colour reaches the whole texture at 248", "[world][scene]") {
+    CHECK(WorldScene::bakedShade(Color::rgba(248, 124, 0, 200)) == Color::rgba(255, 128, 0, 200));
+    CHECK(WorldScene::bakedShade(Color::rgba(48, 48, 48)) == Color::rgba(49, 49, 49));
+    CHECK(WorldScene::bakedShade(Color::rgba(255, 255, 255)) == Color::rgba(255, 255, 255));
+}
+
+TEST_CASE("an object flagged to go without its lightmap is drawn flat", "[world][scene]") {
+    Fixture f("world-scene-flat");
+    const auto dir = test::scratchDirectory("world-scene-flat-layout");
+    writeTextFile(dir / "world.json", R"({"objects": [
+      {"name": "FLOOR", "position": [0, 0, 0], "next": 1},
+      {"name": "FLOOR", "position": [0, 0, 40], "next": -1, "objectFlags": 16384}]})");
+    WorldLayout layout;
+    REQUIRE(layout.load(dir));
+    REQUIRE(f.scene.build(layout, f.models, f.textures, f.device));
+    f.scene.draw(f.device, Mat4{1.0f}, Vec3{10.0f, 0.0f, 10.0f});
+    REQUIRE(f.device.draws.size() == 2); // the lightmapped floor and the flat one apart
+    const bool firstMapped = f.device.draws[0].lightmap() != nullptr;
+    const auto& mapped = f.device.draws[firstMapped ? 0 : 1];
+    const auto& flat = f.device.draws[firstMapped ? 1 : 0];
+    CHECK(mapped.lightmap() == &f.textures.texture(f.device, 2));
+    CHECK(flat.lightmap() == nullptr);
+    for (const ImmediateVertex& v : flat.vertices) {
+        CHECK(v.color == Color::white());
+    }
 }
 
 TEST_CASE("point lights brighten the baked geometry they reach, prelit or not",
@@ -1106,7 +1132,7 @@ TEST_CASE("point lights brighten the baked geometry they reach, prelit or not",
         return most;
     };
     const u8 plain = reddest();
-    REQUIRE(plain == 48); // its own baked colour, quantized to native five-bit precision
+    REQUIRE(plain == 49); // its own baked colour, five bits spread so 248 is the whole
     // A red light on every side of it, whichever way it faces.
     std::vector<PointLight> lights;
     for (const Vec3 side : {Vec3{3, 0, 0}, Vec3{-3, 0, 0}, Vec3{0, 3, 0}, Vec3{0, -3, 0},

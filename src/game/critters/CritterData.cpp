@@ -11,6 +11,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl::game {
 
@@ -54,7 +55,7 @@ bool CritterData::load(const std::filesystem::path& file, usize typeIndex) {
     *this = CritterData{};
     try {
         if (const auto native =
-                AssetLocator(file.parent_path()).find(file.stem().string() + ".wad")) {
+                AssetLocator(file.parent_path()).find(paths::utf8(file.stem()) + ".wad")) {
             return loadNative(*native, typeIndex);
         }
         const Json root = Json::parse(readTextFile(file), nullptr, true, true);
@@ -277,7 +278,7 @@ bool CritterData::load(const std::filesystem::path& file, usize typeIndex) {
         }
         return true;
     } catch (const std::exception& e) {
-        log::warn("critter data {}: {}", file.string(), e.what());
+        log::warn("critter data {}: {}", paths::utf8(file), e.what());
         *this = CritterData{};
         return false;
     }

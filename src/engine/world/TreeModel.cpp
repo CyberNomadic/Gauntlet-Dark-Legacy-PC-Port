@@ -300,6 +300,7 @@ bool TreeModel::bind(const TreeInfo& tree, ModelSet& models, TextureSet& texture
             node.depthTest = material.depthTest;
             node.sorted = material.sorted;
             node.deferAlways = material.deferAlways;
+            node.behind = material.sortBias < 0.0f;
             node.facing = material.facing;
             if (!info.object.empty()) {
                 const auto model = models.find(info.object);
@@ -494,7 +495,9 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
         // The original draws its items in placement order; this renderer draws the pickups
         // before the fixtures they may stand against, so a pickup's alpha-textured mesh
         // (the authored object bit) composites after them as a whole.
-        const bool pickupPass = pass == Pass::Opaque || pass == Pass::Blended;
+        const bool blendedPass = pass == Pass::Blended || pass == Pass::BlendedAhead ||
+                                 pass == Pass::BlendedBehind;
+        const bool pickupPass = pass == Pass::Opaque || blendedPass;
         const bool blended = deferredNode || additive || fading || dissolving ||
                              (pickupPass && shape.mesh->alphaTextured());
         if (blended != translucent) {
@@ -502,7 +505,11 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
         }
         for (usize p = 0; p < shape.mesh->parts.size(); ++p) {
             const bool deferred = blended || !depthWrite;
-            if ((pass == Pass::Opaque && deferred) || (pass == Pass::Blended && !deferred) ||
+            // Of the deferred parts, the ones sorted behind wait for the scenery's own
+            // deferred queue when the caller splits the blended pass.
+            const bool waits = deferred && node.behind;
+            if ((pass == Pass::Opaque && deferred) || (blendedPass && !deferred) ||
+                (pass == Pass::BlendedAhead && waits) || (pass == Pass::BlendedBehind && !waits) ||
                 (p < shape.hidden.size() && shape.hidden[p])) {
                 continue;
             }
@@ -567,7 +574,7 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
             // pickup shadows and gas can write depth while still requiring smooth alpha.
             // Native death skins (-4 in MBTreeSetAltTex) use their own alpha.
             // Coverage replacement is only for opaque alternate skins/hit flashes.
-            state.alphaToCoverage = pass != Pass::Blended && !dissolving;
+            state.alphaToCoverage = !blendedPass && !dissolving;
             state.cullBack = m_cullBack;
             state.blend = additive ? BlendMode::Additive : BlendMode::Alpha;
             // A baked colour is darkened as drawn; a lit part has it in the light it was
@@ -582,7 +589,7 @@ void TreeModel::drawParts(RenderDevice& device, const Mat4& clip, const Mat4& mo
                 state.lightmapCutout = true;
             }
             // This explicit pass belongs to world pickups, not actor/world cutouts or UI.
-            state.smoothSprite = pass == Pass::Blended && node.facing != 0 && blended;
+            state.smoothSprite = blendedPass && node.facing != 0 && blended;
             // setPrimAlpha sets the console's alpha compare (greater than 2) for every
             // object; a solid cutout's clear texels never show or write depth.
             state.alphaTest = DrawState::kTranslucentAlphaTest;

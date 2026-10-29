@@ -23,6 +23,8 @@ class NativeStateDigest;
 class WorldAnimator {
 public:
     static constexpr f32 kFramesPerSecond = 30.0f;
+    /** The most frames a seam may add past the last key before a cursor is corrupt. */
+    static constexpr f32 kMostSeamFrames = 8.0f;
 
     /** Takes the layout's animations, each starting where its record says. */
     void bind(const WorldLayout& layout);
@@ -44,10 +46,14 @@ public:
     bool held(usize index) const { return m_tracks[index].held; }
 
     /** Mutable cursor only; authored keys remain in the bound layout. frame is
-     * the next pose to sample, since step poses before advancing its clock. */
+     * the next pose to sample, since step poses before advancing its clock; a continuous
+     * turn runs on past its last key through the closing seam. */
     struct Cursor {
         s32 object = -1;
         s32 frames = 0;
+        /** A continuous turn whose keys stop short of closing it runs this many frames past
+         * its last key, at the authored rate, before the cycle closes; none otherwise. */
+        f32 seam = 0;
         f32 frame = 0;
         bool reverse = false;
         bool once = false;
@@ -57,7 +63,7 @@ public:
         bool valid() const;
         bool operator==(const Cursor&) const = default;
         template <class Digest> friend void visitNativeState(Digest& digest, const Cursor& value) {
-            digest.template fields<8>(value);
+            digest.template fields<9>(value);
         }
     };
     std::vector<Cursor> checkpoint() const;
@@ -100,6 +106,10 @@ private:
     struct Track : Cursor {
         TrackInfo track;
         Vec3 origin{0.0f}; ///< immutable rest offset from the parent
+        /** A continuous turn's rotation channel and the signed radians a frame it turns at
+         * through its seam; no channel for any other track. */
+        s32 turnChannel = -1;
+        f32 turnRate = 0.0f;
     };
 
     static void pose(const Track& track, WorldScene& scene);

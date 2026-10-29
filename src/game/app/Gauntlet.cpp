@@ -14,6 +14,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
 #include "engine/math/Math.h"
+#include "engine/platform/Paths.h"
 #include "engine/render/RenderTypes.h"
 
 #include "formats/TplFile.h"
@@ -82,7 +83,7 @@ void Gauntlet::onInit() {
     m_autoSaveIcon.load(renderDevice(), m_options.unpackedDirectory);
     if (!m_strings.load(m_options.dataDirectory / kTextDirectory, m_config.text.language)) {
         log::warn("No text tables under {}; identifiers will show instead of text",
-                  (m_options.dataDirectory / kTextDirectory).string());
+                  paths::utf8(m_options.dataDirectory / kTextDirectory));
     }
     m_audio = std::make_unique<AudioDevice>();
     m_audio->mixer().setStereo(m_config.audio.stereo);
@@ -153,7 +154,7 @@ void Gauntlet::onInit() {
 bool Gauntlet::startScenario(const std::filesystem::path& file) {
     try {
         const Scenario scenario = Scenario::load(file);
-        log::info("Scenario {}: {} in the party", file.string(), scenario.party.size());
+        log::info("Scenario {}: {} in the party", paths::utf8(file), scenario.party.size());
         if (scenario.afterLevel) {
             const auto sceneContext = context();
             const auto levelName = scenario.level.empty() ? "G1" : scenario.level;
@@ -201,14 +202,14 @@ bool Gauntlet::startScenario(const std::filesystem::path& file) {
             }
             const auto level = m_levels.byName(scenario.level);
             if (!level.has_value()) {
-                log::error("Scenario {}: no level named {}", file.string(), scenario.level);
+                log::error("Scenario {}: no level named {}", paths::utf8(file), scenario.level);
                 return false;
             }
             return startLevel(*level, scenario.partyMembers(), scenario.tower);
         }
         return startTower(scenario.partyMembers(), scenario.tower);
     } catch (const std::exception& e) {
-        log::error("Scenario {}: {}", file.string(), e.what());
+        log::error("Scenario {}: {}", paths::utf8(file), e.what());
         return false;
     }
 }
@@ -246,6 +247,7 @@ GameContext Gauntlet::context() {
     context.previewVideo = [this](const GameConfig& config) {
         return applySettings(config, false);
     };
+    context.renderer = activeRenderer();
     context.vibrate = [this](s32 player, s32 frames, ControlFeedback feedback) {
         if (const auto request = controlVibration(m_config, input(), player, frames, feedback)) {
             window().rumble(request->pad, request->low, request->high, request->milliseconds,
@@ -276,6 +278,8 @@ GameContext Gauntlet::context() {
 void Gauntlet::onUpdate(f64 deltaSeconds) {
     m_autoSaveIcon.update(deltaSeconds);
     m_promptDevices.update(input(), m_config);
+    // The pointer steps aside while a pad plays and comes back with the mouse or keyboard.
+    window().hideCursor(m_promptDevices.cursorHidden());
     if (m_netplay) {
         updateNetplay(deltaSeconds);
         m_sounds->update();
@@ -298,6 +302,10 @@ void Gauntlet::onUpdate(f64 deltaSeconds) {
             window().holdCursor(false);
         }
         m_sounds->update();
+        return;
+    }
+    if (m_legendsPreview.isOpen()) {
+        updateLegendsPreview(deltaSeconds);
         return;
     }
     if (updateIdle(deltaSeconds)) {
@@ -334,6 +342,12 @@ void Gauntlet::onUpdate(f64 deltaSeconds) {
     m_sounds->setCategoryScale(SoundCategory::Music, m_demo.isOpen() ? 0.0f : m_musicDuck.level());
     m_sounds->setCategoryScale(SoundCategory::Effects, m_demo.isOpen() ? 0.0f : 1.0f);
     m_sounds->update();
+    if (m_legendsSounds) {
+        m_legendsSounds->setMasterVolume(m_config.audio.masterVolume);
+        m_legendsSounds->setCategoryVolume(SoundCategory::Music, m_config.audio.musicVolume);
+        m_legendsSounds->setCategoryScale(SoundCategory::Music, m_musicDuck.level());
+        m_legendsSounds->update();
+    }
 
     m_fpsAccumulator += deltaSeconds;
     if (m_fpsAccumulator >= kFpsReportInterval) {
@@ -407,6 +421,10 @@ void Gauntlet::updateTitle(f64 deltaSeconds) {
     if (outcome == TitleOutcome::Running) {
         return;
     }
+    if (outcome == TitleOutcome::Quit) {
+        requestQuit();
+        return;
+    }
     if (outcome == TitleOutcome::Netplay) {
         m_netplay = std::make_unique<NetplayNavigation>();
         m_netplay->view.available = OnlineRun::available();
@@ -449,7 +467,7 @@ bool Gauntlet::startPlayerSelect(s32 startingPlayer, std::span<const PartyMember
         return true;
     }
     log::warn("Player select unavailable; unpack the game data into {} with gdlunpack",
-              m_options.unpackedDirectory.string());
+              paths::utf8(m_options.unpackedDirectory));
     return false;
 }
 
@@ -493,6 +511,17 @@ void Gauntlet::updateSelect(f64 deltaSeconds) {
 
 bool Gauntlet::startLevel(const LevelRef& level, std::span<const PartyMember> party,
                           const PlayOptions& options) {
+    if (m_legendsOrigin && level.realmId >= 0) {
+        // An explicit ordinary-level console command ends the visit. Its supplied
+        // party is authoritative; do not leave a stale parked scene or soundtrack.
+        m_legendsOrigin.reset();
+        m_legendsEntryParty.clear();
+        if (m_legendsSounds) {
+            m_legendsSounds->stopAll();
+            m_legendsSounds.reset();
+        }
+        m_play->scene.close();
+    }
     if (!level.isSecret()) {
         m_parent.reset();
     }
@@ -505,7 +534,9 @@ bool Gauntlet::startLevel(const LevelRef& level, std::span<const PartyMember> pa
             return false;
         }
     }
-    if (m_play->scene.open(renderDevice(), context(), m_play->world, party, options)) {
+    PlayOptions opened = options;
+    opened.partyCount = m_partyCountOverride; // the console's party count outlasts a level
+    if (m_play->scene.open(renderDevice(), context(), m_play->world, party, opened)) {
         resetPlayInput();
         log::info("Entering {} ({})", level.name, level.title);
         setMaxFrameRate(m_config.timing.gameplayFrameRate);
@@ -521,7 +552,9 @@ bool Gauntlet::startTower(std::span<const PartyMember> party, const PlayOptions&
     if (m_play->world.built() && !m_play->world.isTower()) {
         return startLevel(LevelRef::tower(), party, options);
     }
-    if (m_play->scene.open(renderDevice(), context(), m_play->world, party, options)) {
+    PlayOptions opened = options;
+    opened.partyCount = m_partyCountOverride;
+    if (m_play->scene.open(renderDevice(), context(), m_play->world, party, opened)) {
         resetPlayInput();
         log::info("Every player is ready; entering the tower");
         setMaxFrameRate(m_config.timing.gameplayFrameRate);
@@ -563,6 +596,9 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
         m_console.setPrompt(actor->save().name + ">");
     }
     m_console.update(deltaSeconds, input(), m_config.menu.console);
+    if (m_legendsPreview.isOpen()) {
+        return;
+    }
     const bool consoleOpen = m_console.open() || consoleWasOpen;
     if (m_console.open() && !consoleWasOpen) {
         resetPlayInput();
@@ -570,10 +606,14 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     // A click in the view under the console picks what stands there; the console going
     // up lets it go.
     if (m_console.open()) {
+        // Over the screen the pointer, once it moves, sees through the console and a click
+        // there picks what is beneath; elsewhere a click picks as before.
         const PointerSnapshot& pointer = input().pointer();
-        if (input().wasPointerPressed() && pointer.inside &&
-            !consoleCovers(Vec2{pointer.x, pointer.y})) {
-            consoleSelect(Vec2{pointer.x, pointer.y});
+        const Vec2 cursor{pointer.x, pointer.y};
+        const bool over = pointer.inside && consoleCovers(cursor);
+        m_console.hover(cursor, over);
+        if (input().wasPointerPressed() && pointer.inside && (!over || m_console.seeThrough())) {
+            consoleSelect(cursor);
         }
     } else if (consoleWasOpen) {
         consoleSelect(std::nullopt);
@@ -626,15 +666,19 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
     // Exit speech begins with the sinking spin, once for the party, and must
     // survive closing PlayScene before the tally. Temple/Underworld and the
     // boss wizard's departure have their own speeches.
-    if (!wasLeaving && m_play->scene.leaving() && !m_play->world.isTower() &&
-        !m_play->world.ref().isSecret() && m_play->world.ref().realmId != 5 &&
-        m_play->world.ref().realmId != 8 &&
+    if (!wasLeaving && m_play->scene.leaving() && !m_play->world.imported() &&
+        !m_play->world.isTower() && !m_play->world.ref().isSecret() &&
+        m_play->world.ref().realmId != 5 && m_play->world.ref().realmId != 8 &&
         m_play->scene.victory().stage() <= BossVictory::Stage::Appearing) {
         m_exitSpeech.begin(m_options.unpackedDirectory, m_sounds.get(),
                            ExitRelics::remaining(m_play->world.placedItems()),
                            m_play->scene.party());
     }
     if (outcome == PlayOutcome::Travel) {
+        if (m_play->world.imported()) {
+            finishLegendsTravel();
+            return;
+        }
         if (m_play->scene.secretTravel() && m_play->world.ref().isSecret() && m_parent) {
             Journey journey;
             journey.secret = true;
@@ -691,6 +735,12 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
         return;
     }
     if (outcome == PlayOutcome::GameOver) {
+        m_legendsOrigin.reset();
+        m_legendsEntryParty.clear();
+        if (m_legendsSounds) {
+            m_legendsSounds->stopAll();
+            m_legendsSounds.reset();
+        }
         m_parent.reset();
         // The game was quit: play the failure movie without overwriting manual saves.
         m_play->scene.close();
@@ -702,6 +752,12 @@ void Gauntlet::updateTower(f64 deltaSeconds) {
         return;
     }
     if (outcome == PlayOutcome::Leave) {
+        m_legendsOrigin.reset();
+        m_legendsEntryParty.clear();
+        if (m_legendsSounds) {
+            m_legendsSounds->stopAll();
+            m_legendsSounds.reset();
+        }
         m_play->scene.close();
         log::info("Leaving the tower for the title screen");
         if (!startTitleScreen()) {
@@ -714,8 +770,9 @@ bool Gauntlet::saveSettings(const GameConfig& config) {
     return applySettings(config, true);
 }
 bool Gauntlet::applySettings(const GameConfig& config, bool persist) {
+    const bool monitorChanged = config.display.monitor != m_config.display.monitor;
     const bool windowChanged =
-        config.display.windowMode != m_config.display.windowMode ||
+        monitorChanged || config.display.windowMode != m_config.display.windowMode ||
         config.display.windowWidth != m_config.display.windowWidth ||
         config.display.windowHeight != m_config.display.windowHeight ||
         (!persist &&
@@ -737,11 +794,24 @@ bool Gauntlet::applySettings(const GameConfig& config, bool persist) {
         const bool rateChanged =
             config.display.maxFrameRate != m_config.display.maxFrameRate ||
             config.timing.gameplayFrameRate != m_config.timing.gameplayFrameRate;
+        const auto restoreWindow = [&] {
+            if (monitorChanged) {
+                window().selectMonitor(m_config.display.monitor);
+            }
+            window().setDisplayMode(m_config.display.windowMode,
+                                    {m_config.display.windowWidth, m_config.display.windowHeight});
+        };
         if (windowChanged) {
             renderDevice().waitIdle();
-            if (!window().setDisplayMode(
-                    config.display.windowMode,
-                    {config.display.windowWidth, config.display.windowHeight})) {
+            if (monitorChanged && !window().selectMonitor(config.display.monitor)) {
+                return false;
+            }
+            const Extent2D size{config.display.windowWidth, config.display.windowHeight};
+            // Another display may lack the mode chosen on this one: its desktop stands in.
+            if (!window().setDisplayMode(config.display.windowMode, size) &&
+                (!monitorChanged || !window().setDisplayMode(config.display.windowMode,
+                                                             window().displayOptions().desktop))) {
+                restoreWindow();
                 return false;
             }
         }
@@ -751,9 +821,7 @@ bool Gauntlet::applySettings(const GameConfig& config, bool persist) {
             }
         } catch (...) {
             if (windowChanged) {
-                window().setDisplayMode(
-                    m_config.display.windowMode,
-                    {m_config.display.windowWidth, m_config.display.windowHeight});
+                restoreWindow();
             }
             throw;
         }
@@ -801,6 +869,10 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
     if (outcome == PauseOutcome::Resume) {
         return;
     }
+    if (outcome == PauseOutcome::Desktop) {
+        requestQuit();
+        return;
+    }
     if (outcome == PauseOutcome::Manage) {
         if (startPlayerSelect(pausePlayer, party, true)) {
             m_play->scene.close();
@@ -808,9 +880,27 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
         return;
     }
     if (outcome == PauseOutcome::Title) {
-        // Quitting the game is the defeat sequence and then the failure movie (opt_quit_request
-        // sets MG_OVER); it does not overwrite the character's manual save.
-        m_play->scene.startGameOver();
+        // Return to Main Menu leaves for the title screen at once. A level left is given up
+        // as Quit Level gives it up; the party's autosave keeps what it brought out.
+        m_legendsOrigin.reset();
+        m_legendsEntryParty.clear();
+        if (m_legendsSounds) {
+            m_legendsSounds->stopAll();
+            m_legendsSounds.reset();
+        }
+        if (!m_play->world.isTower()) {
+            party = m_play->scene.abandonedParty(party);
+        }
+        autoSave(party);
+        m_parent.reset();
+        m_play->scene.close();
+        m_play->world.clear();
+        m_exitSpeech.close();
+        setMaxFrameRate(m_config.display.maxFrameRate);
+        log::info("Leaving for the main menu");
+        if (!startTitleScreen()) {
+            startNextAttractScreen();
+        }
         return;
     }
     if (outcome == PauseOutcome::Shop || outcome == PauseOutcome::Inventory) {
@@ -832,6 +922,11 @@ void Gauntlet::updatePause(f64 deltaSeconds) {
         return;
     }
     if (outcome == PauseOutcome::ReturnTower) {
+        if (m_legendsOrigin) {
+            // Quit Level abandons this native visit; Escape/Resume never leaves it.
+            closeLegendsLevel(false);
+            return;
+        }
         // Quitting a level gives up what it gave, as dying in it does: the original kills
         // the whole party (opt_restart_request), and init_shop with nobody standing skips
         // the tally and the shop for the tower, so neither is shown here.
@@ -1003,12 +1098,12 @@ void Gauntlet::onRender(RenderDevice& device) {
         const auto width = static_cast<f32>(m_config.display.frameWidth);
         const auto height = static_cast<f32>(m_config.display.frameHeight);
         const auto extent = device.framebufferExtent();
-        const auto projection = makeLetterboxProjection(width, height,
-                                                        static_cast<f32>(extent.width),
-                                                        static_cast<f32>(extent.height));
-        m_canvas.begin(device, makeVirtualScreenTransform(
-                                   projection, static_cast<f32>(m_config.display.virtualWidth),
-                                   static_cast<f32>(m_config.display.virtualHeight), width, height));
+        const auto projection = makeLetterboxProjection(
+            width, height, static_cast<f32>(extent.width), static_cast<f32>(extent.height));
+        m_canvas.begin(device,
+                       makeVirtualScreenTransform(
+                           projection, static_cast<f32>(m_config.display.virtualWidth),
+                           static_cast<f32>(m_config.display.virtualHeight), width, height));
         m_console.draw(m_canvas);
         m_canvas.end();
     }
@@ -1035,8 +1130,8 @@ std::vector<std::string> Gauntlet::levelDebugLines() const {
     for (s32 id = 0; id < Enemies::kMost; ++id) {
         enemiesAlive += enemies.alive(id) ? 1 : 0;
     }
-    return LevelDebugOverlay::describe(*world, scene->participants(),
-                                       scene->camera().localState(), enemiesAlive);
+    return LevelDebugOverlay::describe(*world, scene->participants(), scene->camera().localState(),
+                                       enemiesAlive);
 }
 
 PlayScene::Inputs Gauntlet::readPlayInputs(f64 deltaSeconds) {
@@ -1095,6 +1190,19 @@ void Gauntlet::renderScene(RenderDevice& device) {
     const Mat4 projection =
         makeLetterboxProjection(frameWidth, frameHeight, static_cast<f32>(framebuffer.width),
                                 static_cast<f32>(framebuffer.height));
+    if (m_legendsPreview.isOpen()) {
+        m_legendsPreview.render(device, projection, frameWidth, frameHeight,
+                                glm::radians(m_config.camera.horizontalFovDegrees));
+        if (m_console.visible()) {
+            m_canvas.begin(device, makeVirtualScreenTransform(
+                                       projection, static_cast<f32>(m_config.display.virtualWidth),
+                                       static_cast<f32>(m_config.display.virtualHeight), frameWidth,
+                                       frameHeight));
+            m_console.draw(m_canvas);
+            m_canvas.end();
+        }
+        return;
+    }
     if (m_netplay) {
         if (m_select.isOpen()) {
             m_select.render(device, projection, frameWidth, frameHeight);
@@ -1210,6 +1318,12 @@ void Gauntlet::onShutdown() {
     m_netplay.reset();
     window().stopRumble();
     m_online.reset();
+    commitLegendsProgress();
+    m_legendsPreview.close();
+    if (m_legendsSounds) {
+        m_legendsSounds->stopAll();
+        m_legendsSounds.reset();
+    }
     m_buildLabel.release();
     m_levelDebug.release();
     m_console.release();
@@ -1217,6 +1331,8 @@ void Gauntlet::onShutdown() {
     m_idleScreen.close();
     m_demo.close();
     m_parent.reset();
+    m_legendsOrigin.reset();
+    m_legendsEntryParty.clear();
     m_pause.close();
     m_movie.close();
     m_title.close();
@@ -1238,7 +1354,7 @@ bool Gauntlet::startMovie(std::string_view name) {
     m_movie.setVolume(m_config.audio.masterVolume * m_config.audio.movieVolume);
     const auto file = m_assets->find(std::format("{}/{}.avi", kMovieDirectory, name));
     if (!file.has_value()) {
-        log::warn("Movie '{}' not found under {}", name, m_assets->root().string());
+        log::warn("Movie '{}' not found under {}", name, paths::utf8(m_assets->root()));
         return false;
     }
     if (!m_movie.open(renderDevice(), m_audio->mixer(), *file)) {
@@ -1259,7 +1375,7 @@ bool Gauntlet::startTitleScreen() {
     if (!m_titleWarned) {
         m_titleWarned = true;
         log::warn("Title screen unavailable; unpack the game data into {} with gdlunpack",
-                  m_options.unpackedDirectory.string());
+                  paths::utf8(m_options.unpackedDirectory));
     }
     return false;
 }

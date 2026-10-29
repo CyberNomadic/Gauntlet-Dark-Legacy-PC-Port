@@ -146,6 +146,8 @@ public:
                                                   const CharacterSave& save);
     void animate(f32 stickMagnitude, s32 ticks, f32 seconds, PlayerDeed deed = PlayerDeed::None,
                  bool chainHeldMelee = false);
+    /** Advance the held departure pose and cosmetic clocks, without attack releases. */
+    void animateDeparture(f32 seconds);
     /** Clears the last presentation interval when a scene tick may hold the figure. */
     void capturePresentation();
     u64 animationRevision() const { return m_action.revision; }
@@ -349,6 +351,9 @@ private:
     s32 m_backNode = -1; ///< what wings hang from: the root's first child's first child
     TreeModel m_familiarMissile;
     TreeModel m_missile;
+    /** The colour costume's archive, loaded only for a name-selected costume that ships no
+     * throw of its own: its missile is thrown instead. */
+    ItemArchive m_missileFallbackArchive;
     ItemArchive* m_missileArchive = nullptr;
     std::string m_missileName;
     SoundSet m_voice;

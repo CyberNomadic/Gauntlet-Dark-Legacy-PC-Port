@@ -346,7 +346,8 @@ void decorate(Packet::State& state) {
     auto& figure = statue.figure;
     figure.pose.tree = "STONE";
     figure.pose.nodes = {{"ROOT", -1, {1, 2, 3}}};
-    figure.pose.poses = {{{0.1f, 0.2f, 0.3f}, {4, 5, 6}, {1, 2, 3}, true}};
+    figure.pose.poses = {
+        {{0.1f, 0.2f, 0.3f}, {4, 5, 6}, {1, 2, 3}, NodePose::RotationOrder::PitchYawRoll}};
     figure.presentationPose = figure.pose;
     figure.textures = {17, 0.25f, 0.5f};
     figure.particles = visual.state.particles;

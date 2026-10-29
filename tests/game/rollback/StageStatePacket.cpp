@@ -754,7 +754,7 @@ template <class A, class T> void field(A& a, T& v) {
     } else if constexpr (std::is_same_v<V, TreePose::Checkpoint::Node>) {
         fields(a, v.name, v.parent, v.rest);
     } else if constexpr (std::is_same_v<V, NodePose>) {
-        fields(a, v.rotation, v.position, v.scale, v.pitchYawRoll);
+        fields(a, v.rotation, v.position, v.scale, v.rotationOrder);
     } else if constexpr (std::is_same_v<V, TreeParticles::Checkpoint>) {
         fields(a, v.field, v.nodes);
     } else if constexpr (std::is_same_v<V, TreeParticles::Binding>) {

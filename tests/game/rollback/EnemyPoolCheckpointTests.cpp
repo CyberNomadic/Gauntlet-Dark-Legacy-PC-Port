@@ -52,8 +52,10 @@ EnemyAnimator::Checkpoint animation(usize nodes = 3) {
             pose.nodes.push_back({"WIRE_NODE_" + std::to_string(index),
                                   static_cast<s32>(index) - 1,
                                   {0.5f, -0.25f, 0.75f}});
-            pose.poses.push_back(
-                {{0.125f, 0.25f, -0.5f}, {0.75f, -1.25f, 1.5f}, {0.875f, 1.125f, 1.25f}, true});
+            pose.poses.push_back({{0.125f, 0.25f, -0.5f},
+                                  {0.75f, -1.25f, 1.5f},
+                                  {0.875f, 1.125f, 1.25f},
+                                  NodePose::RotationOrder::PitchYawRoll});
         }
     }
     value.previous->poses[0].rotation.x = -0.75f;
@@ -78,15 +80,16 @@ Enemies::Checkpoint varied() {
     state.contactGridOrigin = {-31, 47};
     state.contactGridInverseWidth = 0.25f;
     state.bomber = 7;
-    state.view.emplace();
-    state.view->position = {1, 2, 3};
-    state.view->right = {1, 0, 0};
-    state.view->up = {0, 1, 0};
-    state.view->forward = {0, 0, 1};
-    state.view->sinX = 0.125f;
-    state.view->cosX = 0.25f;
-    state.view->sinY = 0.5f;
-    state.view->cosY = 0.75f;
+    ViewVolume eye;
+    eye.position = {1, 2, 3};
+    eye.right = {1, 0, 0};
+    eye.up = {0, 1, 0};
+    eye.forward = {0, 0, 1};
+    eye.sinX = 0.125f;
+    eye.cosX = 0.25f;
+    eye.sinY = 0.5f;
+    eye.cosY = 0.75f;
+    state.view = ViewSet::of(eye, Vec3{4, 5, 6});
     state.inView = 19;
     state.frame = 0x91827364;
     state.pendingTicks = 1;

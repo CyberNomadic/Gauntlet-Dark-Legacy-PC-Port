@@ -50,7 +50,10 @@ Vec3& channelTarget(NodePose& pose, u32 channel) {
 /** Reads one key's channels into a pose, leaving unkeyed channels at rest. */
 NodePose keyPose(const TrackInfo& track, usize key) {
     NodePose pose;
-    pose.pitchYawRoll = track.pitchYawRoll();
+    pose.rotationOrder = (track.flags & TrackInfo::kYawPitchRoll) != 0
+                             ? NodePose::RotationOrder::YawPitchRoll
+                         : track.pitchYawRoll() ? NodePose::RotationOrder::PitchYawRoll
+                                                : NodePose::RotationOrder::RollYawPitch;
     const u32 channels = track.channelCount();
     usize at = key * channels;
     for (u32 c = 0; c < TrackInfo::kChannelCount; ++c) {
@@ -81,6 +84,7 @@ bool TreePose::Checkpoint::valid() const {
         const auto& pose = poses[index];
         if (!checkpointName(node.name) || node.parent < -1 ||
             node.parent >= static_cast<s32>(index) || !checkpointVector(node.rest) ||
+            pose.rotationOrder > NodePose::RotationOrder::YawPitchRoll ||
             !checkpointVector(pose.rotation) || !checkpointVector(pose.position) ||
             !checkpointVector(pose.scale)) {
             return false;
@@ -156,13 +160,16 @@ NodePose TreePose::sample(const TrackInfo& track, f32 frame, bool smooth) {
     const auto nextFrame = static_cast<f32>(track.frames[next]);
     NodePose to = keyPose(track, next);
     // Presentation can sample continuously; native gameplay retains its key snap window.
-    if (currentFrame < nextFrame && nextFrame - frame > (smooth ? 0.0f : kKeyWindow)) {
+    const bool linearAngles = (track.flags & TrackInfo::kLinearAngles) != 0;
+    if (currentFrame < nextFrame &&
+        nextFrame - frame > (smooth || linearAngles ? 0.0f : kKeyWindow)) {
         const NodePose from = keyPose(track, current);
         const f32 t = (frame - currentFrame) / (nextFrame - currentFrame);
         for (s32 i = 0; i < 3; ++i) {
             const f32 step = to.rotation[i] - from.rotation[i];
-            to.rotation[i] =
-                std::abs(step) < kHoldAngle ? from.rotation[i] + step * t : from.rotation[i];
+            to.rotation[i] = linearAngles || std::abs(step) < kHoldAngle
+                                 ? from.rotation[i] + step * t
+                                 : from.rotation[i];
         }
         to.position = from.position + (to.position - from.position) * t;
         to.scale = from.scale + (to.scale - from.scale) * t;
@@ -263,7 +270,19 @@ Mat4 TreePose::localMatrix(const NodePose& pose, const Vec3& restPosition) {
     const f32 s2 = -portable::sin(pose.rotation.z);
     Mat4 matrix{1.0f};
     const std::span<f32, 16> m(glm::value_ptr(matrix), 16);
-    if (pose.pitchYawRoll) {
+    if (pose.rotationOrder == NodePose::RotationOrder::YawPitchRoll) {
+        // N64 Legends e0014d04. Unlike either GameCube order, yaw is applied
+        // before pitch. Keep the same negated-sine convention as the other paths.
+        m[0] = c1 * c2 - s1 * s0 * s2;
+        m[1] = c0 * s2;
+        m[2] = s1 * c2 + c1 * s0 * s2;
+        m[4] = -c1 * s2 - s1 * s0 * c2;
+        m[5] = c0 * c2;
+        m[6] = -s1 * s2 + c1 * s0 * c2;
+        m[8] = -s1 * c0;
+        m[9] = -s0;
+        m[10] = c1 * c0;
+    } else if (pose.rotationOrder == NodePose::RotationOrder::PitchYawRoll) {
         const f32 a = s0 * s1;
         const f32 b = c0 * s1;
         m[0] = c1 * c2;
@@ -373,7 +392,7 @@ Vec3 TreePose::readAngles(usize node) const {
 void TreePose::setPitchYawRoll(usize node, const Vec3& angles) {
     GDL_VERIFY(node < m_poses.size(), "node out of range");
     m_poses[node].rotation = wrapAngles(angles);
-    m_poses[node].pitchYawRoll = true;
+    m_poses[node].rotationOrder = NodePose::RotationOrder::PitchYawRoll;
     compose();
 }
 

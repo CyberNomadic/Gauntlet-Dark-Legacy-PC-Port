@@ -30,6 +30,7 @@
 #include "game/level/DestructibleWalls.h"
 #include "game/level/FallingScenery.h"
 #include "game/level/HazardSurfaces.h"
+#include "game/level/ImportedLevel.h"
 #include "game/level/LevelCatalog.h"
 #include "game/level/LevelItemArchives.h"
 #include "game/level/LevelTriggers.h"
@@ -102,11 +103,18 @@ public:
      * realm's data the default light and camera range stand in. */
     bool load(RenderDevice& device, const std::filesystem::path& unpackedRoot,
               const LevelRef& level = LevelRef::tower());
+    /** Hosts an already decoded offline level without interpreting its native records as
+     * GameCube items or campaign markers. Common character effects still use POWERUPS. */
+    bool loadImported(RenderDevice& device, const std::filesystem::path& unpackedRoot,
+                      const LevelRef& level, WorldLayout layout, WorldCollision collision,
+                      std::shared_ptr<ImportedLevel> imported);
+    ImportedLevel* imported() { return m_imported.get(); }
+    const ImportedLevel* imported() const { return m_imported.get(); }
     /** The level loaded. */
     const LevelRef& ref() const { return m_ref; }
     bool isTower() const { return m_ref.isTower(); }
     void clear();
-    bool built() const { return m_scene.built(); }
+    bool built() const { return m_imported != nullptr || m_scene.built(); }
 
     /** Moves the level's animated objects (and the collision that rides on them) and steps
      * its texture animations by `seconds`. */
@@ -117,6 +125,9 @@ public:
         m_sim.textureAdvance = 0;
         m_scene.capturePresentation();
         m_placedItems.capturePresentation();
+        if (m_imported) {
+            m_imported->capturePresentation();
+        }
     }
     /** Opens at once the gates a party already qualifies for, as the level starts; in the
      * tower, with `access`, the lifts down to the battlefield's portals too once its first
@@ -133,6 +144,7 @@ public:
     const LevelTriggers& triggers() const { return m_triggers; }
     void activateTrigger(s32 id, bool atOnce);
     void shootTrigger(usize index) { m_triggers.shoot(index); }
+    bool pressTrigger(usize index) { return m_triggers.press(index); }
     const Rotators& rotators() const { return m_rotators; }
     std::vector<RotatorCue> takeRotatorCues() { return std::exchange(m_sim.rotatorCues, {}); }
     std::vector<Vec3> takeWorldExplosions() { return m_destruction.takeExplosions(); }
@@ -314,6 +326,9 @@ public:
     void drawOpaque(RenderDevice& device, const Mat4& clip, const WorldCamera& camera,
                     f32 presentationAlpha = -1.0f) const {
         const CameraFrame frame = CameraFrame::of(camera);
+        if (m_imported) {
+            m_imported->draw(device, clip, camera, TreeModel::Pass::Opaque, presentationAlpha);
+        }
         m_scene.drawOpaque(device, clip, frame, presentationAlpha,
                            presentedTextureFrameOffset(presentationAlpha));
         m_skorneArena.draw(device, clip, m_sim.litNow,
@@ -328,16 +343,25 @@ public:
     }
     /** The pickups' alpha-textured bodies composite over the solids first; the veils
      * (the Trenches' haze) then blend over everything standing under them; the sorted
-     * objects and the particles follow. */
+     * objects follow. The pickup parts the authored flags sort behind (a gem's halo and
+     * crystal, which write no depth) come after the scenery's deferred queue, as the
+     * original's lowered sort key orders them: the tower's rune strips, veils since they
+     * wear alpha, and its sorted trees no longer paint over the glow of a gem standing
+     * before them. The particles close. */
     void drawDeferred(RenderDevice& device, const Mat4& clip, const WorldCamera& camera,
                       f32 presentationAlpha = -1.0f) const {
         const CameraFrame frame = CameraFrame::of(camera);
-        m_placedItems.draw(device, clip, m_sim.litNow, &frame, TreeModel::Pass::Blended,
+        m_placedItems.draw(device, clip, m_sim.litNow, &frame, TreeModel::Pass::BlendedAhead,
                            presentationAlpha);
+        if (m_imported) {
+            m_imported->draw(device, clip, camera, TreeModel::Pass::Blended, presentationAlpha);
+        }
         m_scene.drawVeils(device, clip, frame, presentationAlpha,
                           presentedTextureFrameOffset(presentationAlpha));
         m_scene.drawDeferred(device, clip, frame, presentationAlpha,
                              presentedTextureFrameOffset(presentationAlpha));
+        m_placedItems.draw(device, clip, m_sim.litNow, &frame, TreeModel::Pass::BlendedBehind,
+                           presentationAlpha);
         m_sim.particles.draw(device, clip, frame.right, frame.up,
                              m_sim.particlesAdvanced ? presentationAlpha : -1.0f);
     }
@@ -352,6 +376,7 @@ private:
     void loadLevelData(const std::filesystem::path& unpackedRoot);
     void applyAmbientOffset(f32 offset);
     LevelRef m_ref = LevelRef::tower();
+    std::shared_ptr<ImportedLevel> m_imported;
     Simulation m_sim;
     void syncCollision();
 

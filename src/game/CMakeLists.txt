@@ -5,8 +5,9 @@
 # them), party (the party in a level, frame by frame), enemies (the swarm and the level's
 # opponents), critters, bosses, tower (between levels, with Sumner), shop, hud, menu
 # (widgets and the in-game menus), rollback (commands, timelines and checkpoints), netplay
-# (rooms and sessions), scenes (the full screens), app (the driver and attract flow). A
-# module includes only those below it; app owns the input boundary.
+# (rooms and sessions), console (the developer console, its command objects and their
+# parsers), scenes (the full screens), app (the driver and attract flow). A module includes
+# only those below it; app owns the input boundary.
 add_library(game STATIC
     netplay/AssetDigest.cpp
     menu/NetplayMenu.cpp
@@ -58,10 +59,13 @@ add_library(game STATIC
     level/DestructibleWalls.cpp
     level/MissileTarget.cpp
     menu/SettingsMenu.cpp
+    menu/MainMenuFactory.cpp
     menu/SettingsRows.cpp
+    menu/TextHighlight.cpp
     menu/ControlSettings.cpp
     hud/ControlPrompts.cpp
     menu/VideoSettings.cpp
+    menu/MenuFont.cpp
     hud/CompassHud.cpp
     menu/SaveMenu.cpp
     menu/PauseMenu.cpp
@@ -82,12 +86,62 @@ add_library(game STATIC
     shop/ShopLayout.cpp
     app/Gauntlet.h
     app/Gauntlet.cpp
+    app/GauntletLegends.cpp
+    scenes/LegendsPreview.cpp
+    scenes/LegendsLevel.cpp
+    level/LegendsUnlocks.cpp
+    level/LegendsPortalAppearance.cpp
+    bosses/LegendsBosses.cpp
+    critters/LegendsCritters.cpp
+    enemies/LevelOpponentsImported.cpp
+    enemies/LegendsActors.cpp
+    scenes/LegendsLevelBoss.cpp
+    scenes/LegendsSceneBoss.cpp
+    scenes/LegendsSceneArena.cpp
+    scenes/LegendsWorldPresentation.cpp
+    camera/LegendsCamera.cpp
+    level/LegendsTowerMotion.cpp
+    level/LegendsTowerProgress.cpp
+    level/LegendsTowerPortals.cpp
+    level/LegendsGates.cpp
+    level/LegendsPortals.cpp
+    scenes/LegendsTraversal.cpp
+    scenes/LegendsMusic.cpp
+    scenes/LegendsMapCatalog.cpp
+    scenes/LegendsSceneAdapter.cpp
+    scenes/LegendsLevelEffects.cpp
+    scenes/LegendsSceneTraps.cpp
+    audio/LegendsSounds.cpp
+    scenes/LegendsSceneContainers.cpp
+    scenes/LegendsSceneProgress.cpp
+    scenes/LegendsSceneRiders.cpp
+    scenes/LegendsSceneGenerators.cpp
+    scenes/LegendsScrolls.cpp
+    level/LegendsContainers.cpp
+    level/LegendsBlast.cpp
+    level/LegendsTraps.cpp
+    level/LegendsSwitches.cpp
+    level/LegendsLootSelectors.cpp
+    level/LegendsWorldMotion.cpp
+    scenes/LegendsSceneSwitches.cpp
+    enemies/LegendsGenerators.cpp
+    scenes/LegendsInitialPose.cpp
+    scenes/LegendsN64Music.cpp
+    characters/LegendsProgress.cpp
+    characters/LegendsVisit.cpp
+    level/LegendsItems.cpp
+    level/LegendsN64Items.cpp
+    level/LegendsDreamcastItems.cpp
     app/GauntletNetplay.cpp
     app/GameCursor.cpp
     app/BuildLabel.cpp
     app/LevelDebugOverlay.cpp
-    app/DevConsole.cpp
-    scenes/ConsoleCommands.cpp
+    console/ConsoleCommand.h
+    console/ConsoleCommand.cpp
+    console/DevConsole.h
+    console/DevConsole.cpp
+    console/ConsoleCommands.h
+    console/ConsoleCommands.cpp
     app/GauntletConsole.cpp
     app/LevelCompletion.h
     audio/MusicDuck.h
@@ -328,6 +382,8 @@ add_library(game STATIC
     hud/StatusBox.cpp
     hud/StreakMeter.h
     hud/StreakMeter.cpp
+    hud/CompanionArrows.h
+    hud/CompanionArrows.cpp
     mechanics/MechanicsFacade.h
     mechanics/MechanicsFacade.cpp
     hud/PowerupSelector.h
@@ -338,6 +394,8 @@ add_library(game STATIC
     scenes/TransitionScreen.cpp
     scenes/LevelLoadingScreen.h
     scenes/LevelLoadingScreen.cpp
+    scenes/MapPicture.h
+    scenes/MapPicture.cpp
     party/PortalDeparture.h
     party/PortalDeparture.cpp
     tower/LevelExitSpeech.cpp
@@ -429,6 +487,7 @@ set_target_properties(game PROPERTIES FOLDER "game")
 add_executable(gauntlet main.cpp)
 
 target_link_libraries(gauntlet PRIVATE gdl::game)
+gdl_use_utf8_code_page(gauntlet)
 
 # On Windows the executable carries the memory-card icon from the disc, which gdlunpack
 # converts while building; nothing from the assets is checked in.
@@ -474,7 +533,9 @@ gdl_add_shaders(gauntlet
         ${CMAKE_SOURCE_DIR}/shaders/ambient_occlusion_ms.frag
         ${CMAKE_SOURCE_DIR}/shaders/depth_of_field.frag
         ${CMAKE_SOURCE_DIR}/shaders/depth_of_field_ms.frag
-    INCLUDES ${CMAKE_SOURCE_DIR}/shaders/depth_of_field.glsl
+    INCLUDES ${CMAKE_SOURCE_DIR}/shaders/platform.glsl
+             ${CMAKE_SOURCE_DIR}/shaders/immediate_constants.glsl
+             ${CMAKE_SOURCE_DIR}/shaders/depth_of_field.glsl
              ${CMAKE_SOURCE_DIR}/shaders/bloom.glsl
              ${CMAKE_SOURCE_DIR}/shaders/ambient_occlusion.glsl
              ${CMAKE_SOURCE_DIR}/shaders/scene_depth.glsl)

@@ -168,6 +168,12 @@ public:
     void advanceBlasts(f32 seconds, std::span<PlayerRuntime> players, const Events& events);
     Chests& chests() { return m_chests; }
     const Chests& chests() const { return m_chests; }
+    /** The developer console's hand on a gate: open without a key, sounding as it swings, or
+     * shut again. */
+    bool unlockGate(usize index);
+    bool lockGate(usize index);
+    /** The developer console's hand on a chest: wanting a key, or opening without one. */
+    bool setChestLocked(usize index, bool locked) { return m_chests.setLocked(index, locked); }
     LockedGates& gates() { return m_gates; }
     const LockedGates& gates() const { return m_gates; }
     const Traps& traps() const { return m_traps; }

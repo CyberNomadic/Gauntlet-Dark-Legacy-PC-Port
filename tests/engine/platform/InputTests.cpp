@@ -188,6 +188,11 @@ TEST_CASE("keys and pad buttons round-trip through their names", "[platform][inp
     REQUIRE(keyName(Key::W) == "W");
     REQUIRE(keyFromName("enter") == Key::Enter);
     REQUIRE(keyFromName("BACKSPACE") == Key::Backspace);
+    REQUIRE(keyFromName("Mouse4") == Key::Mouse4);
+    REQUIRE(keyFromName("mouse5") == Key::Mouse5);
+    REQUIRE(keyFromName("ScrollUp") == Key::ScrollUp);
+    REQUIRE(keyFromName("scrolldown") == Key::ScrollDown);
+    REQUIRE(keyName(Key::ScrollDown) == "ScrollDown");
     REQUIRE_FALSE(keyFromName("NoSuchKey").has_value());
     REQUIRE_FALSE(keyFromName("").has_value());
     REQUIRE(padButtonName(PadButton::DpadUp) == "DpadUp");

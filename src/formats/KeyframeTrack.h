@@ -28,6 +28,9 @@ struct NodeTrack {
     static constexpr u16 kChannels = 0x777;
     static constexpr u16 kPitchYawRoll =
         0x8000; ///< rotate pitch, yaw then roll; else roll, yaw, pitch
+    // Adapter-only flags: readKeyTrack never copies these from GameCube data.
+    static constexpr u16 kYawPitchRoll = 0x0800;
+    static constexpr u16 kLinearAngles = 0x1000;
     static constexpr u32 kChannelCount = 9;
 
     u32 node = 0;

@@ -11,7 +11,7 @@ namespace gdl::game {
 namespace {
 // Match checkpoint capabilities at admission, including development builds that
 // share a semver but cannot safely consume one another's replay envelopes.
-constexpr u8 kProtocol = 36;
+constexpr u8 kProtocol = 38;
 constexpr usize kPending = 16;
 constexpr usize kCardLimit = 1024;
 enum class Kind : u8 { Game, Join, Roster, Ready, Reject, Card, Hello };
@@ -113,6 +113,8 @@ void HostedRoom::changed(bool membership) {
         bytes.push_back(m_room.settings.maxPlayers);
         bytes.push_back(m_room.settings.difficulty);
         bytes.push_back(m_room.settings.friendlyFire);
+        bytes.push_back(m_room.settings.camera);
+        bytes.push_back(m_room.settings.aggressor);
         bytes.push_back(static_cast<u8>(m_room.members.size()));
         for (const auto& member : m_room.members) {
             string(bytes, member.peer);
@@ -246,7 +248,8 @@ void HostedRoom::message(Connection id, std::span<const u8> bytes) {
             const auto peer = string(reader);
             RoomSnapshot room{"HOSTROOM", peerId(1), number(reader), false, {}};
             const auto started = reader.readU8();
-            room.settings = {reader.readU8(), reader.readU8(), reader.readU8()};
+            room.settings = {reader.readU8(), reader.readU8(), reader.readU8(), reader.readU8(),
+                             reader.readU8()};
             const auto count = reader.readU8();
             if (started > 1 || count == 0 || count > 4 || !room.settings.valid()) {
                 disconnect(id);

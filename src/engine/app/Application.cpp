@@ -13,6 +13,7 @@
 #include "engine/core/Types.h"
 #include "engine/platform/DisplayTiming.h"
 #include "engine/platform/Paths.h"
+#include "engine/render/RenderTypes.h"
 #include "engine/render/ThreadedRenderDevice.h"
 
 namespace gdl {
@@ -20,18 +21,6 @@ namespace {
 bool frameTimingEnabled() {
     const char* value = std::getenv("GDL_FRAME_TIMING");
     return value != nullptr && std::string_view(value) == "1";
-}
-
-std::optional<SpikeThreshold> spikeThresholdFromEnvironment() {
-    const char* value = std::getenv("GDL_SPIKE_MS");
-    if (value == nullptr) {
-        return std::nullopt;
-    }
-    const auto parsed = SpikeThreshold::parse(value);
-    if (!parsed.has_value()) {
-        log::warn("GDL_SPIKE_MS={} is not off, auto or a number of milliseconds", value);
-    }
-    return parsed;
 }
 
 void reportFrameTiming(const FrameTimingTotals& totals, u32 frameRate) {
@@ -57,20 +46,27 @@ Application::Application(ApplicationDesc desc) : m_desc(std::move(desc)) {}
 
 Application::~Application() = default;
 
-std::string FrameSpike::describe() const {
-    using Phase = FrameTimingPhase;
-    const auto ms = [this](Phase phase) {
-        return timing.milliseconds[static_cast<usize>(phase)];
-    };
-    return std::format("Frame spike: {:.1f} ms of work past {:.1f} at frame {}: poll {:.1f} "
-                       "update {:.1f} ({} ticks) acquire {:.1f} render {:.1f} present {:.1f}",
-                       busyMilliseconds, thresholdMilliseconds, frame, ms(Phase::Poll),
-                       ms(Phase::Update), timing.updates, ms(Phase::Acquire), ms(Phase::Render),
-                       ms(Phase::Present));
-}
-
-void Application::onFrameSpike(const FrameSpike& spike) {
-    log::warn("{}", spike.describe());
+bool Application::startRenderer(GraphicsApi api) {
+    WindowDesc window = m_desc.window;
+    window.api = api;
+    RenderDeviceDesc deviceDesc;
+    deviceDesc.vsync = m_desc.vsync;
+    deviceDesc.sampleCount = m_desc.sampleCount;
+    deviceDesc.textureFiltering = m_desc.textureFiltering;
+    deviceDesc.enableValidation = m_desc.enableValidation;
+    deviceDesc.shaderDirectory = paths::executableDirectory() / "shaders";
+    try {
+        m_window = createGlfwWindow(window);
+        m_device = api == GraphicsApi::OpenGl ? createOpenGlRenderDevice(*m_window, deviceDesc)
+                                              : createVulkanRenderDevice(*m_window, deviceDesc);
+    } catch (const RenderDeviceUnavailable& e) {
+        log::warn("{} cannot start here: {}", graphicsApiName(api), e.what());
+        m_device.reset();
+        m_window.reset();
+        return false;
+    }
+    m_renderer = api;
+    return true;
 }
 
 void Application::setUpdateRate(u32 rate) {
@@ -85,24 +81,21 @@ void Application::setUpdateRate(u32 rate) {
 s32 Application::run() {
     try {
         log::info("Starting {}", m_desc.window.title);
-        m_window = createGlfwWindow(m_desc.window);
-
-        RenderDeviceDesc deviceDesc;
-        deviceDesc.vsync = m_desc.vsync;
-        deviceDesc.sampleCount = m_desc.sampleCount;
-        deviceDesc.textureFiltering = m_desc.textureFiltering;
-        deviceDesc.enableValidation = m_desc.enableValidation;
-        deviceDesc.shaderDirectory = paths::executableDirectory() / "shaders";
-        m_device = createVulkanRenderDevice(*m_window, deviceDesc);
+        // The API asked for, else the other: a machine without Vulkan plays through OpenGL.
+        if (!startRenderer(m_desc.renderer)) {
+            const GraphicsApi other = otherGraphicsApi(m_desc.renderer);
+            log::warn("Trying {} instead", graphicsApiName(other));
+            if (!startRenderer(other)) {
+                log::error("Neither Vulkan nor OpenGL can draw on this machine");
+                return 1;
+            }
+        }
         if (m_desc.threadedPresentation) {
             m_device = std::make_unique<ThreadedRenderDevice>(std::move(m_device),
                                                               m_window->framebufferSize());
         }
 
         checkAssetDirectory();
-        if (const auto threshold = spikeThresholdFromEnvironment()) {
-            m_spikeThreshold = *threshold;
-        }
         onInit();
         u32 lastFrameRate = 0;
         FramePacer framePacer;
@@ -116,12 +109,8 @@ s32 Application::run() {
             const auto frameStart = std::chrono::steady_clock::now();
             auto mark = frameStart;
             FrameTimingSample timing;
-            // The spike tracer measures too: a few clock reads a frame, reported only when
-            // a frame's work runs past its threshold.
-            const bool traceSpikes =
-                m_spikeThreshold.at(lastFrameRate != 0 ? lastFrameRate : 60) > 0;
             const auto measure = [&](FrameTimingPhase phase) {
-                if (measureFrames || traceSpikes) {
+                if (measureFrames) {
                     const auto now = std::chrono::steady_clock::now();
                     timing.measure(phase, mark, now);
                     mark = now;
@@ -178,14 +167,6 @@ s32 Application::run() {
                 lastFrameRate = frameRate;
             }
             const auto frameFinished = std::chrono::steady_clock::now();
-            if (traceSpikes) {
-                const f64 busy =
-                    std::chrono::duration<f64, std::milli>(frameFinished - frameStart).count();
-                const f64 threshold = m_spikeThreshold.at(frameRate);
-                if (threshold > 0 && busy > threshold) {
-                    onFrameSpike({timing, busy, threshold, m_renderedFrames});
-                }
-            }
             // Rendering at 30 Hz must not batch 60 Hz online input/network ticks in pairs.
             // A busy or minimized renderer still polls and services the session normally.
             const u32 loopRate =
@@ -233,9 +214,9 @@ void Application::checkAssetDirectory() const {
     const auto marker = dir / "STATIC" / "objects.ngc";
     std::error_code ec;
     if (std::filesystem::exists(marker, ec)) {
-        log::info("Asset directory: {}", dir.string());
+        log::info("Asset directory: {}", paths::utf8(dir));
     } else {
-        log::warn("Asset directory {} does not contain STATIC/objects.ngc", dir.string());
+        log::warn("Asset directory {} does not contain STATIC/objects.ngc", paths::utf8(dir));
     }
 }
 

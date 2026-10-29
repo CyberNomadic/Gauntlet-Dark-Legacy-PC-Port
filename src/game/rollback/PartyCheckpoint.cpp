@@ -20,21 +20,21 @@ std::optional<std::vector<u8>> PartyCheckpointPacket::encode(const PartyCheckpoi
         return std::nullopt;
     }
     std::vector<u8> bytes;
-    bytes.reserve(kBytes);
+    bytes.reserve(kHeaderBytes + profile->size());
     word(bytes, kMagic);
-    bytes.insert(bytes.end(), {1, checkpoint.seat, 0, 0});
+    bytes.insert(bytes.end(), {kVersion, checkpoint.seat, 0, 0});
     word(bytes, static_cast<u32>(checkpoint.epoch));
     word(bytes, static_cast<u32>(checkpoint.epoch >> 32U));
     bytes.insert(bytes.end(), profile->begin(), profile->end());
     return bytes;
 }
 std::optional<PartyCheckpoint> PartyCheckpointPacket::decode(std::span<const u8> bytes) {
-    if (bytes.size() != kBytes || !recognizes(bytes)) {
+    if (bytes.size() < kMinBytes || bytes.size() > kMaxBytes || !recognizes(bytes)) {
         return std::nullopt;
     }
     ByteReader reader(bytes);
     reader.readU32();
-    if (reader.readU8() != 1) {
+    if (reader.readU8() != kVersion) {
         return std::nullopt;
     }
     const u8 seat = reader.readU8();
@@ -43,7 +43,7 @@ std::optional<PartyCheckpoint> PartyCheckpointPacket::decode(std::span<const u8>
     }
     const u64 low = reader.readU32();
     const u64 epoch = low | (u64{reader.readU32()} << 32U);
-    auto profile = CharacterProfilePacket::decode(reader.readBytes(CharacterProfilePacket::kBytes));
+    auto profile = CharacterProfilePacket::decode(reader.readBytes(reader.remaining()));
     if (epoch == 0 || !profile) {
         return std::nullopt;
     }

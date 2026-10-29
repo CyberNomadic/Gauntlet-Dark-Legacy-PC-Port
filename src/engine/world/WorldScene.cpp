@@ -15,6 +15,7 @@
 #include "engine/math/PortableMath.h"
 #include "engine/render/HeatDistortion.h"
 #include "engine/world/ThermalMaterial.h"
+#include "engine/world/WorldCollision.h"
 
 namespace gdl {
 
@@ -132,7 +133,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
                        std::span<TextureSet* const> lenders,
                        std::span<const usize> controlledObjects,
                        std::span<const usize> backgroundObjects,
-                       std::span<const usize> cameraFadeObjects) {
+                       std::span<const usize> cameraFadeObjects, const WorldCollision* floors) {
     clear();
     m_lighting = lighting;
     const std::vector<WorldObject>& objects = layout.objects();
@@ -169,6 +170,40 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
     // out, so it is drawn after the figures standing under it (the Trenches' haze).
     const auto veilOf = [&](u32 slot, bool additive) {
         return !additive && slot < textures.size() && textures.entry(slot).translucent();
+    };
+    // Not so a decal: a flat sheet lying on another object's floor (the tower's rune strips)
+    // has nothing standing under it, and drawn after the pickups it would cut a hole where
+    // a shadow wrote depth before it. It stays among the solids, as the original draws it.
+    const auto decalOf = [&](const Mesh& mesh, const Vec3& offset, usize object) {
+        if (floors == nullptr || mesh.vertices.empty()) {
+            return false;
+        }
+        f32 lowest = std::numeric_limits<f32>::max();
+        f32 highest = std::numeric_limits<f32>::lowest();
+        for (const MeshVertex& v : mesh.vertices) {
+            lowest = std::min(lowest, v.position.y + offset.y);
+            highest = std::max(highest, v.position.y + offset.y);
+        }
+        if (highest - lowest > kDecalThickness) {
+            return false;
+        }
+        const usize step = std::max<usize>(1, mesh.vertices.size() / 16);
+        usize tried = 0;
+        usize supported = 0;
+        for (usize k = 0; k < mesh.vertices.size(); k += step) {
+            const Vec3 at = mesh.vertices[k].position + offset;
+            ++tried;
+            auto hit = floors->floorAt(at + Vec3{0.0f, kDecalLift, 0.0f}, 0.0f, kDecalLift * 2);
+            if (hit.has_value() && hit->object == static_cast<s32>(object)) {
+                // Its own faces are the highest here: look under them.
+                hit = floors->floorAt(at - Vec3{0.0f, 0.02f, 0.0f}, 0.0f, kDecalLift);
+            }
+            if (hit.has_value() && hit->object != static_cast<s32>(object) &&
+                std::abs(hit->y - at.y) <= kDecalLift) {
+                ++supported;
+            }
+        }
+        return tried > 0 && supported * 2 >= tried;
     };
     const auto batchFor = [&](u32 slot, u32 lightmap, bool additive, bool depthWrite,
                               bool depthTest, bool veil) -> Batch& {
@@ -222,7 +257,10 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
             ObjectMaterial::fromFlags(object.objectFlags | (cameraFade ? 0x400U : 0U));
         const bool chrome = material.chrome;
         const bool additive = material.additive;
-        const bool prelit = object.prelit() && mesh->prelit;
+        // A mesh with a colour stream is shaded by it (the lightmapped geometry); an object
+        // flagged to go without its lightmap is drawn flat, colours and all (pbSetDORegs).
+        const bool flat = (object.objectFlags & object_flags::kNoLightmap) != 0;
+        const bool prelit = mesh->prelit && !flat;
         const bool depthWrite = material.depthWrite;
         const u32 facing = material.facing;
         // The original skips the compare for the no-depth-test word. The camera-facing glows
@@ -255,6 +293,7 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
         placedUnit.distanceFadeRange = material.distanceFadeRange;
         placedUnit.distanceSortScale = material.distanceSortScale;
         const Vec3 offset = layout.worldPosition(i);
+        const bool decal = !m_placements[i].moving && decalOf(*mesh, offset, i);
         bool placed = false;
         for (const MeshPart& part : mesh->parts) {
             const Slot& slot = slotFor(part.texture, textures, device, lenders);
@@ -262,27 +301,29 @@ bool WorldScene::build(const WorldLayout& layout, ModelSet& models, TextureSet& 
                 continue;
             }
             try {
+                const u32 lightmap = flat ? 0U : part.lightmap;
                 if (unit) {
                     UnitPart unitPart;
                     unitPart.slot = part.texture;
                     unitPart.part = &part;
-                    if (part.lightmap != 0 && part.lightmap < textures.size()) {
-                        const TextureSetEntry& map = textures.entry(part.lightmap);
-                        unitPart.lightmap = &textures.texture(device, part.lightmap);
+                    if (lightmap != 0 && lightmap < textures.size()) {
+                        const TextureSetEntry& map = textures.entry(lightmap);
+                        unitPart.lightmap = &textures.texture(device, lightmap);
                         unitPart.lightmapScale =
                             Vec2{1.0f / static_cast<f32>(std::max(map.width, 1U)),
                                  1.0f / static_cast<f32>(std::max(map.height, 1U))};
                     }
                     unitPart.additive = additive;
-                    placedUnit.veil = placedUnit.veil || veilOf(part.texture, additive);
+                    placedUnit.veil =
+                        placedUnit.veil || (veilOf(part.texture, additive) && !decal);
                     placedUnit.parts.push_back(unitPart);
                 } else {
-                    Batch& batch = batchFor(part.texture, part.lightmap, additive, depthWrite,
-                                            depthTest, veilOf(part.texture, additive));
+                    Batch& batch = batchFor(part.texture, lightmap, additive, depthWrite,
+                                            depthTest, veilOf(part.texture, additive) && !decal);
                     for (const u32 index : part.indices) {
                         const MeshVertex& v = mesh->vertices[index];
                         const Vec3 at = v.position + offset;
-                        batch.geometry.vertex(at, shadeOf(additive, prelit, v, v.normal, lighting),
+                        batch.geometry.vertex(at, shadeOf(additive, prelit, v),
                                               chrome ? chromeUv(v.normal) : v.uv,
                                               v.lightmapUv * batch.lightmapScale);
                         if (batch.normals.empty()) {
@@ -886,12 +927,19 @@ void WorldScene::setPointLights(std::span<const PointLight> points) {
     m_lighting.points.assign(points.begin(), points.end());
 }
 
-Color WorldScene::shadeOf(bool additive, bool prelit, const MeshVertex& vertex, const Vec3& normal,
-                          const WorldLighting& lighting) {
+Color WorldScene::bakedShade(Color color) {
+    constexpr u32 kFull = 248; ///< lbl_80348F54: the five-bit channels' top, spread to bytes
+    const auto channel = [](u8 value) {
+        return static_cast<u8>(std::min(255U, (u32{value} * 255U + kFull / 2) / kFull));
+    };
+    return Color{channel(color.r), channel(color.g), channel(color.b), color.a};
+}
+
+Color WorldScene::shadeOf(bool additive, bool prelit, const MeshVertex& vertex) {
     if (additive) {
         return kUnlit;
     }
-    return prelit ? vertex.color : lighting.shade(normal);
+    return prelit ? bakedShade(vertex.color) : kUnlit;
 }
 
 Color WorldScene::shadeAt(bool additive, bool prelit, const MeshVertex& vertex,
@@ -899,8 +947,7 @@ Color WorldScene::shadeAt(bool additive, bool prelit, const MeshVertex& vertex,
     if (additive) {
         return kUnlit;
     }
-    return prelit ? lighting.brighten(vertex.color, position, normal)
-                  : lighting.shade(position, normal);
+    return lighting.brighten(shadeOf(additive, prelit, vertex), position, normal);
 }
 
 f32 WorldScene::drawnOpacity(const Unit& unit, const CameraFrame& camera,

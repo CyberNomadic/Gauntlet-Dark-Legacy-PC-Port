@@ -100,11 +100,6 @@ Json buttonNames(const std::vector<PadButton>& buttons) {
     return names;
 }
 
-std::filesystem::path environmentPath(const char* variable) {
-    const char* value = std::getenv(variable); // NOLINT(concurrency-mt-unsafe): read at startup
-    return value == nullptr ? std::filesystem::path{} : std::filesystem::path(value);
-}
-
 } // namespace
 
 bool GameConfig::loadFile(const std::filesystem::path& file) {
@@ -113,7 +108,7 @@ bool GameConfig::loadFile(const std::filesystem::path& file) {
         mergeJson(std::string(bytes.begin(), bytes.end()));
         return true;
     } catch (const std::exception& e) {
-        log::warn("Config {}: {}", file.string(), e.what());
+        log::warn("Config {}: {}", paths::utf8(file), e.what());
         return false;
     }
 }
@@ -127,6 +122,15 @@ void GameConfig::mergeJson(std::string_view json) {
     }
     if (root.contains("display")) {
         const Json& d = root.at("display");
+        if (d.contains("renderer")) {
+            const auto& renderer = d.at("renderer");
+            const auto api =
+                renderer.is_string() ? parseGraphicsApi(renderer.get<std::string>()) : std::nullopt;
+            if (!api) {
+                throw FormatError("renderer must be vulkan or opengl");
+            }
+            display.renderer = *api;
+        }
         read(d, "virtualWidth", display.virtualWidth);
         read(d, "virtualHeight", display.virtualHeight);
         read(d, "frameWidth", display.frameWidth);
@@ -145,6 +149,7 @@ void GameConfig::mergeJson(std::string_view json) {
                 throw FormatError("unknown window mode");
             }
         }
+        read(d, "monitor", display.monitor);
         read(d, "vsync", display.vsync);
         read(d, "depthOfField", display.depthOfField);
         read(d, "bloom", display.bloom);
@@ -219,6 +224,7 @@ void GameConfig::mergeJson(std::string_view json) {
             }
             multiplayer.mode = static_cast<MultiplayerMode>(index);
         }
+        read(options, "soloCamera", multiplayer.soloCamera);
     }
     if (root.contains("controls")) {
         const Json& c = root.at("controls");
@@ -295,6 +301,7 @@ void GameConfig::mergeJson(std::string_view json) {
             read(moves, "magicHoldSeconds", play.magicHoldSeconds);
             read(moves, "magicDoubleTapSeconds", play.magicDoubleTapSeconds);
             read(moves, "padMagicGestures", play.padMagicGestures);
+            read(moves, "keyboardMagicGestures", play.keyboardMagicGestures);
             read(moves, "actionChords", play.actionChords);
         }
     }
@@ -345,13 +352,15 @@ std::string GameConfig::toJson() const {
     } else if (display.windowMode == WindowMode::BorderlessFullscreen) {
         windowModeName = "borderless";
     }
-    root["display"] = {{"virtualWidth", display.virtualWidth},
+    root["display"] = {{"renderer", std::string(graphicsApiName(display.renderer))},
+                       {"virtualWidth", display.virtualWidth},
                        {"virtualHeight", display.virtualHeight},
                        {"frameWidth", display.frameWidth},
                        {"frameHeight", display.frameHeight},
                        {"windowWidth", display.windowWidth},
                        {"windowHeight", display.windowHeight},
                        {"windowMode", windowModeName},
+                       {"monitor", display.monitor},
                        {"vsync", display.vsync},
                        {"sampleCount", display.sampleCount},
                        {"textureFiltering", display.textureFiltering},
@@ -382,7 +391,8 @@ std::string GameConfig::toJson() const {
           {"enemyHealthBars", combat.enemyHealthBars},
           {"autoActivateItems", combat.autoActivateItems},
           {"autoAim", combat.autoAim}}},
-        {"multiplayer", MultiplayerConfig::kNames[static_cast<usize>(multiplayer.mode)]}};
+        {"multiplayer", MultiplayerConfig::kNames[static_cast<usize>(multiplayer.mode)]},
+        {"soloCamera", multiplayer.soloCamera}};
     root["controls"] = {{"explicitMovement", true},
                         {"keyboard",
                          {{"up", keyNames(menu.up)},
@@ -447,6 +457,7 @@ std::string GameConfig::toJson() const {
                           {"magicHoldSeconds", play.magicHoldSeconds},
                           {"magicDoubleTapSeconds", play.magicDoubleTapSeconds},
                           {"padMagicGestures", play.padMagicGestures},
+                          {"keyboardMagicGestures", play.keyboardMagicGestures},
                           {"actionChords", play.actionChords}}}};
     root["controls"]["players"] = writeControlProfiles(*this);
     return root.dump(2) + "\n";
@@ -476,7 +487,8 @@ std::filesystem::path GameConfig::saveDirectory(const std::filesystem::path& gam
     if (save.directory.empty()) {
         return gameDirectory / kSavesFolder;
     }
-    const std::filesystem::path named{save.directory};
+    // The settings hold the name as UTF-8, whatever the system code page.
+    const std::filesystem::path named = paths::fromUtf8(save.directory);
     return named.is_absolute() ? named : gameDirectory / named;
 }
 
@@ -490,11 +502,11 @@ std::filesystem::path GameConfig::userSettingsPath(const std::filesystem::path& 
 
 bool GameConfig::loadUserSettings() {
 #if defined(_WIN32)
-    const std::filesystem::path base = environmentPath("APPDATA");
+    const std::filesystem::path base = paths::environment("APPDATA");
 #else
-    std::filesystem::path base = environmentPath("XDG_CONFIG_HOME");
+    std::filesystem::path base = paths::environment("XDG_CONFIG_HOME");
     if (base.empty()) {
-        const std::filesystem::path home = environmentPath("HOME");
+        const std::filesystem::path home = paths::environment("HOME");
         if (!home.empty()) {
             base = home / ".config";
         }
@@ -525,7 +537,7 @@ bool GameConfig::loadUserSettings(const std::filesystem::path& gameDirectory,
             // existence check. Never replace that instance's settings during migration.
             if (std::filesystem::copy_file(legacyFile, local,
                                            std::filesystem::copy_options::skip_existing)) {
-                log::info("Imported existing settings into {}", local.string());
+                log::info("Imported existing settings into {}", paths::utf8(local));
             }
             loaded = *this;
             if (!loaded.loadFile(local)) {
@@ -535,7 +547,7 @@ bool GameConfig::loadUserSettings(const std::filesystem::path& gameDirectory,
         *this = std::move(loaded);
         return true;
     } catch (const std::exception& error) {
-        log::warn("Could not load local settings {}: {}", local.string(), error.what());
+        log::warn("Could not load local settings {}: {}", paths::utf8(local), error.what());
         return false;
     }
 }

@@ -54,7 +54,6 @@ public:
         bool autoActivateItems = true;
         bool expandedShop = false;
         bool autoAim = true;
-        bool aggressorMode = true;
         u8 startupDelay = 1;
         bool valid() const;
         bool operator==(const NativeRules&) const = default;

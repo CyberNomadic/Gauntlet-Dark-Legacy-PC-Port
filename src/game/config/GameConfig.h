@@ -9,12 +9,16 @@
 #include "engine/core/Types.h"
 #include "engine/platform/DisplayMode.h"
 #include "engine/platform/Input.h"
+#include "engine/render/RenderTypes.h"
 
 #include "game/config/MultiplayerMode.h"
 
 namespace gdl::game {
 
 struct DisplayConfig {
+    /** The graphics API the game draws with, from its next start: Vulkan, or OpenGL for a
+     * machine whose driver has none. Vulkan's absence falls back to OpenGL either way. */
+    GraphicsApi renderer = GraphicsApi::Vulkan;
     u32 virtualWidth = 512; ///< the 2D layer's coordinate space
     u32 virtualHeight = 384;
     u32 frameWidth = 640; ///< the frame the game composes, letterboxed onto the window
@@ -22,6 +26,7 @@ struct DisplayConfig {
     u32 windowWidth = 1280;
     u32 windowHeight = 896;
     WindowMode windowMode = WindowMode::Windowed;
+    s32 monitor = -1; ///< the display the game is on, in the platform's order; -1 wherever it is
     bool vsync = true;
     bool depthOfField = false;     ///< experimental scene-only far-field blur; never blurs the HUD
     bool bloom = false;            ///< experimental scene-only highlight glow; leaves UI untouched
@@ -73,6 +78,9 @@ struct DifficultyConfig {
 struct MultiplayerConfig {
     static constexpr std::array<std::string_view, 3> kNames{"normal", "stun", "hurt"};
     MultiplayerMode mode = MultiplayerMode::Normal;
+    /** An online room's camera rule as last hosted: each player's own camera rather than
+     * the one shared by the party. Offered again when the next room is hosted. */
+    bool soloCamera = false;
 };
 
 struct CombatConfig {
@@ -87,7 +95,7 @@ struct CombatConfig {
 struct GameOptionsConfig {
     bool expandedShop = false;
     bool autoSave = false;
-    bool aggressorMode = true; ///< the meter over a run of close blows and the swarm it stirs
+    bool aggressorMode = false;
 };
 
 /** Where characters are saved: a `saves` folder beside the game when the directory is
@@ -167,6 +175,9 @@ struct PlayBindings {
     f32 magicHoldSeconds = 0.25f;
     f32 magicDoubleTapSeconds = 0.25f;
     bool padMagicGestures = true; ///< false: usePotion binding casts immediately
+    /** The keyboard's potion key taps, holds and double-taps as a pad's does; off, the
+     * throw and shield keys alone throw and shield. */
+    bool keyboardMagicGestures = false;
     bool actionChords = true; ///< quick+turbo, quick+magic and turbo+magic follow action bindings
 };
 

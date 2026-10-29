@@ -15,7 +15,10 @@ struct PartyCheckpoint {
 };
 class PartyCheckpointPacket {
 public:
-    static constexpr usize kBytes = 16 + CharacterProfilePacket::kBytes;
+    static constexpr u8 kVersion = 2;
+    static constexpr usize kHeaderBytes = 16;
+    static constexpr usize kMinBytes = kHeaderBytes + CharacterProfilePacket::kMinBytes;
+    static constexpr usize kMaxBytes = kHeaderBytes + CharacterProfilePacket::kMaxBytes;
     static bool recognizes(std::span<const u8> bytes);
     static std::optional<std::vector<u8>> encode(const PartyCheckpoint& checkpoint);
     static std::optional<PartyCheckpoint> decode(std::span<const u8> bytes);

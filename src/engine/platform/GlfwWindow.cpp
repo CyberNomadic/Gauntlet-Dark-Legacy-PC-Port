@@ -21,6 +21,7 @@
 #include "engine/core/Assert.h"
 #include "engine/core/Log.h"
 #include "engine/platform/DisplayTiming.h"
+#include "engine/render/RenderDevice.h"
 
 namespace gdl {
 std::string GlfwWindow::clipboardText() const {
@@ -115,21 +116,36 @@ constexpr auto kKeyMap = std::to_array<KeyMapping>({
 
 } // namespace
 
-GlfwWindow::GlfwWindow(const WindowDesc& desc) {
+GlfwWindow::GlfwWindow(const WindowDesc& desc) : m_api(desc.api) {
     if (glfwReferenceCount() == 0) {
         glfwSetErrorCallback(glfwErrorCallback);
         GDL_VERIFY(glfwInit() == GLFW_TRUE, "glfwInit failed");
     }
     ++glfwReferenceCount();
 
-    GDL_VERIFY(glfwVulkanSupported() == GLFW_TRUE,
-               "GLFW reports no Vulkan support (is a Vulkan-capable driver installed?)");
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwDefaultWindowHints();
+    if (m_api == GraphicsApi::OpenGl) {
+        // The OpenGL device needs the 3.3 core profile: sampler objects, explicit attribute
+        // locations and multisampled renderbuffers.
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    } else {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    }
     glfwWindowHint(GLFW_RESIZABLE, desc.resizable ? GLFW_TRUE : GLFW_FALSE);
 
     m_window = glfwCreateWindow(static_cast<s32>(desc.width), static_cast<s32>(desc.height),
                                 desc.title.c_str(), nullptr, nullptr);
+    if (m_window == nullptr && m_api == GraphicsApi::OpenGl) {
+        // Without a window no destructor runs: let the library go here.
+        if (--glfwReferenceCount() == 0) {
+            glfwTerminate();
+        }
+        throw RenderDeviceUnavailable("No OpenGL 3.3 context could be made for the window");
+    }
     GDL_VERIFY(m_window != nullptr, "glfwCreateWindow failed");
 #ifdef _WIN32
     // With no SDL video thread, HID discovery runs a window-filtered PeekMessage loop
@@ -149,8 +165,10 @@ GlfwWindow::GlfwWindow(const WindowDesc& desc) {
         }
     });
     glfwSetMouseButtonCallback(m_window, [](GLFWwindow* window, s32 button, s32 action, s32) {
+        // The five buttons GLFW numbers from the left one stand in the key table in that
+        // order: left, right, middle, then the two side buttons.
         if (action == GLFW_PRESS && button >= GLFW_MOUSE_BUTTON_LEFT &&
-            button <= GLFW_MOUSE_BUTTON_MIDDLE) {
+            button <= GLFW_MOUSE_BUTTON_5) {
             auto* self = static_cast<GlfwWindow*>(glfwGetWindowUserPointer(window));
             self->m_input.latchKey(static_cast<Key>(static_cast<s32>(Key::MouseLeft) + button));
         }
@@ -166,8 +184,16 @@ GlfwWindow::GlfwWindow(const WindowDesc& desc) {
     glfwSetScrollCallback(m_window, [](GLFWwindow* window, f64, f64 vertical) {
         auto* self = static_cast<GlfwWindow*>(glfwGetWindowUserPointer(window));
         self->m_input.scrollPointer(static_cast<f32>(vertical));
+        // A notch is a press as well, so the wheel can be bound where a button can.
+        if (vertical != 0.0) {
+            self->m_input.latchKey(vertical > 0.0 ? Key::ScrollUp : Key::ScrollDown);
+        }
     });
 
+    if (desc.monitor >= 0 && !selectMonitor(desc.monitor)) {
+        log::warn("Saved display {} is not attached; using the one the window is on",
+                  desc.monitor + 1);
+    }
     if (desc.mode != WindowMode::Windowed &&
         !setDisplayMode(desc.mode, {desc.width, desc.height})) {
         log::warn("Saved display mode unavailable; retaining a window");
@@ -194,9 +220,7 @@ void GlfwWindow::pollEvents() {
     m_input.beginPoll();
     glfwPollEvents();
     // Monitor removal can return GLFW to windowed mode independently of our menu.
-    if (windowMode() != WindowMode::Fullscreen && cursorCaptured()) {
-        glfwSetInputMode(m_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-    }
+    applyCursorMode();
     pollKeyboard();
     m_gamepads.poll(m_input, glfwGetWindowAttrib(m_window, GLFW_FOCUSED) == GLFW_TRUE);
     f64 x = 0;
@@ -259,11 +283,14 @@ void GlfwWindow::pollKeyboard() {
     for (const auto& mapping : kKeyMap) {
         m_input.setKey(mapping.key, glfwGetKey(m_window, mapping.glfwKey) == GLFW_PRESS);
     }
-    for (s32 button = GLFW_MOUSE_BUTTON_LEFT; button <= GLFW_MOUSE_BUTTON_MIDDLE; ++button) {
+    for (s32 button = GLFW_MOUSE_BUTTON_LEFT; button <= GLFW_MOUSE_BUTTON_5; ++button) {
         m_input.setKey(static_cast<Key>(static_cast<s32>(Key::MouseLeft) + button),
                        glfwGetWindowAttrib(m_window, GLFW_FOCUSED) == GLFW_TRUE &&
                            glfwGetMouseButton(m_window, button) == GLFW_PRESS);
     }
+    // The wheel is never held: its notches are the latched presses alone.
+    m_input.setKey(Key::ScrollUp, false);
+    m_input.setKey(Key::ScrollDown, false);
 }
 
 void GlfwWindow::charCallback(GLFWwindow* window, u32 codepoint) {
@@ -340,13 +367,74 @@ GLFWmonitor* GlfwWindow::activeMonitor() const {
     return selected;
 }
 
+GLFWmonitor* GlfwWindow::targetMonitor() const {
+    s32 count = 0;
+    auto** monitors = glfwGetMonitors(&count);
+    if (monitors != nullptr && m_preferredMonitor >= 0 && m_preferredMonitor < count) {
+        return std::span(monitors,
+                         static_cast<usize>(count))[static_cast<usize>(m_preferredMonitor)];
+    }
+    return activeMonitor();
+}
+
+bool GlfwWindow::selectMonitor(s32 index) {
+    s32 count = 0;
+    auto** monitors = glfwGetMonitors(&count);
+    if (index >= count) {
+        return false;
+    }
+    m_preferredMonitor = std::max(index, -1);
+    if (index < 0 || monitors == nullptr) {
+        return true;
+    }
+    auto* monitor = std::span(monitors, static_cast<usize>(count))[static_cast<usize>(index)];
+    if (auto* attached = glfwGetWindowMonitor(m_window)) {
+        if (attached == monitor) {
+            return true;
+        }
+        // The same mode on the display chosen, at its own desktop size when the current
+        // size is not among its modes.
+        const WindowMode mode = windowMode();
+        s32 width = 0;
+        s32 height = 0;
+        glfwGetWindowSize(m_window, &width, &height);
+        const Extent2D size{static_cast<u32>(std::max(0, width)),
+                            static_cast<u32>(std::max(0, height))};
+        return setDisplayMode(mode, size) || setDisplayMode(mode, displayOptions().desktop);
+    }
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
+        // A window moves to the middle of the display's work area.
+        s32 x = 0;
+        s32 y = 0;
+        s32 width = 0;
+        s32 height = 0;
+        glfwGetMonitorWorkarea(monitor, &x, &y, &width, &height);
+        s32 windowWidth = 0;
+        s32 windowHeight = 0;
+        glfwGetWindowSize(m_window, &windowWidth, &windowHeight);
+        glfwSetWindowPos(m_window, x + (width - windowWidth) / 2, y + (height - windowHeight) / 2);
+    }
+    return true;
+}
+
 DisplayOptions GlfwWindow::displayOptions() const {
     DisplayOptions result;
     s32 width = 0;
     s32 height = 0;
     glfwGetWindowSize(m_window, &width, &height);
     result.window = {static_cast<u32>(std::max(0, width)), static_cast<u32>(std::max(0, height))};
-    auto* monitor = activeMonitor();
+    auto* monitor = targetMonitor();
+    s32 monitorCount = 0;
+    auto** monitors = glfwGetMonitors(&monitorCount);
+    if (monitors != nullptr) {
+        for (auto* attached : std::span(monitors, static_cast<usize>(std::max(0, monitorCount)))) {
+            const char* name = glfwGetMonitorName(attached);
+            if (attached == monitor) {
+                result.monitor = static_cast<s32>(result.monitors.size());
+            }
+            result.monitors.emplace_back(name != nullptr ? name : "");
+        }
+    }
     if (monitor == nullptr) {
         return result;
     }
@@ -388,16 +476,32 @@ WindowMode GlfwWindow::windowMode() const {
 }
 
 void GlfwWindow::holdCursor(bool held) {
-    if (held) {
-        // Disabled, GLFW hides the pointer, keeps its place to put it back and reports
-        // its motion without the screen's edges in the way.
-        glfwSetInputMode(m_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    } else if (m_cursorHeld) {
-        glfwSetInputMode(m_window, GLFW_CURSOR,
-                         windowMode() == WindowMode::Fullscreen ? GLFW_CURSOR_CAPTURED
-                                                                : GLFW_CURSOR_NORMAL);
-    }
     m_cursorHeld = held;
+    applyCursorMode();
+}
+
+void GlfwWindow::hideCursor(bool hidden) {
+    m_cursorHidden = hidden;
+    applyCursorMode();
+}
+
+void GlfwWindow::applyCursorMode() {
+    // Disabled, GLFW hides the pointer, keeps its place to put it back and reports its
+    // motion without the screen's edges in the way. Hidden only hides it; it cannot be
+    // confined at the same time, so a pad-driven fullscreen game lets it go until the
+    // mouse moves again. Captured remains visible; GLFW releases the OS confinement on
+    // focus loss.
+    s32 mode = GLFW_CURSOR_NORMAL;
+    if (m_cursorHeld) {
+        mode = GLFW_CURSOR_DISABLED;
+    } else if (m_cursorHidden) {
+        mode = GLFW_CURSOR_HIDDEN;
+    } else if (windowMode() == WindowMode::Fullscreen) {
+        mode = GLFW_CURSOR_CAPTURED;
+    }
+    if (glfwGetInputMode(m_window, GLFW_CURSOR) != mode) {
+        glfwSetInputMode(m_window, GLFW_CURSOR, mode);
+    }
 }
 
 bool GlfwWindow::cursorCaptured() const {
@@ -409,7 +513,7 @@ bool GlfwWindow::setDisplayMode(WindowMode mode, Extent2D resolution) {
     if (resolution.isZero() || resolution.width > 32768 || resolution.height > 32768) {
         return false;
     }
-    auto* monitor = activeMonitor();
+    auto* monitor = targetMonitor();
     const auto options = displayOptions();
     if (mode != WindowMode::Windowed && (monitor == nullptr || options.desktop.isZero())) {
         return false;
@@ -419,16 +523,16 @@ bool GlfwWindow::setDisplayMode(WindowMode mode, Extent2D resolution) {
         return false;
     }
     const bool attached = glfwGetWindowMonitor(m_window) != nullptr;
-    if (!attached) {
-        if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
-            glfwGetWindowPos(m_window, &m_windowX, &m_windowY);
-        }
-        if (monitor != nullptr) {
-            m_desktopMonitor = monitor;
-            m_desktopSize = options.desktop;
-            if (const auto* desktop = glfwGetVideoMode(monitor)) {
-                m_desktopRefresh = desktop->refreshRate;
-            }
+    if (!attached && glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
+        glfwGetWindowPos(m_window, &m_windowX, &m_windowY);
+    }
+    // The desktop of the display taken is kept to give back; a move to another display
+    // records that one's.
+    if ((!attached || monitor != m_desktopMonitor) && monitor != nullptr) {
+        m_desktopMonitor = monitor;
+        m_desktopSize = options.desktop;
+        if (const auto* desktop = glfwGetVideoMode(monitor)) {
+            m_desktopRefresh = desktop->refreshRate;
         }
     }
     if (mode == WindowMode::BorderlessFullscreen) {
@@ -468,9 +572,7 @@ bool GlfwWindow::setDisplayMode(WindowMode mode, Extent2D resolution) {
     glfwSetWindowMonitor(m_window, mode == WindowMode::Windowed ? nullptr : monitor, m_windowX,
                          m_windowY, static_cast<s32>(resolution.width),
                          static_cast<s32>(resolution.height), refresh);
-    // Captured remains visible; GLFW releases the OS confinement on focus loss.
-    glfwSetInputMode(m_window, GLFW_CURSOR,
-                     mode == WindowMode::Fullscreen ? GLFW_CURSOR_CAPTURED : GLFW_CURSOR_NORMAL);
+    applyCursorMode();
     if (glfwGetError(nullptr) == GLFW_NO_ERROR) {
         return true;
     }
@@ -530,15 +632,36 @@ void GlfwWindow::waitWhileMinimized() {
 }
 
 std::vector<const char*> GlfwWindow::requiredVulkanInstanceExtensions() const {
+    if (glfwVulkanSupported() != GLFW_TRUE) {
+        return {};
+    }
     u32 count = 0;
     const char** names = glfwGetRequiredInstanceExtensions(&count);
-    GDL_VERIFY(names != nullptr, "glfwGetRequiredInstanceExtensions failed");
+    if (names == nullptr) {
+        return {};
+    }
     const std::span<const char* const> extensions(names, count);
     return {extensions.begin(), extensions.end()};
 }
 
 bool GlfwWindow::createVulkanSurface(VkInstance instance, VkSurfaceKHR* outSurface) const {
     return glfwCreateWindowSurface(instance, m_window, nullptr, outSurface) == VK_SUCCESS;
+}
+
+void GlfwWindow::makeContextCurrent(bool current) {
+    glfwMakeContextCurrent(current ? m_window : nullptr);
+}
+
+void GlfwWindow::swapBuffers() {
+    glfwSwapBuffers(m_window);
+}
+
+void GlfwWindow::setSwapInterval(s32 interval) {
+    glfwSwapInterval(interval);
+}
+
+OpenGlProcedure GlfwWindow::openGlProcedure(const char* name) const {
+    return glfwGetProcAddress(name);
 }
 
 std::unique_ptr<Window> createGlfwWindow(const WindowDesc& desc) {

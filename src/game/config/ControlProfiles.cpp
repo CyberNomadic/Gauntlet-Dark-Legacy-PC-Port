@@ -85,6 +85,13 @@ void readControlProfiles(const nlohmann::json& json, GameConfig& config) {
         if (!profile.customized) {
             continue;
         }
+        // The potion key's gestures are the player's own, beside their bindings.
+        if (value.contains("gestures")) {
+            const auto& gestures = value.at("gestures");
+            profile.play.padMagicGestures = gestures.value("pad", profile.play.padMagicGestures);
+            profile.play.keyboardMagicGestures =
+                gestures.value("keyboard", profile.play.keyboardMagicGestures);
+        }
         const auto& bindings = value.at("bindings");
         for (const auto actions : kPersistedActions) {
             for (const auto& action : actions) {
@@ -131,6 +138,8 @@ nlohmann::json writeControlProfiles(const GameConfig& config) {
             {"rumble", profile.rumble},
             {"scheme", std::string(kKeyboardSchemeNames[static_cast<usize>(profile.scheme)])}};
         if (profile.customized) {
+            value["gestures"] = {{"pad", profile.play.padMagicGestures},
+                                 {"keyboard", profile.play.keyboardMagicGestures}};
             for (const auto actions : kPersistedActions) {
                 for (const auto& action : actions) {
                     auto& binding = value["bindings"][action.id];

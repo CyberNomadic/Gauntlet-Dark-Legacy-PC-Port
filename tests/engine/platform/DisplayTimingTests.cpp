@@ -137,28 +137,4 @@ TEST_CASE("frame diagnostics separate wall time update count and worst phase dur
     CHECK(totals.average(FrameTimingPhase::Oversleep) == 1.5);
     CHECK(totals.maximum(FrameTimingPhase::Oversleep) == 3);
 }
-TEST_CASE("a spike threshold follows the display, takes a setting and reads back",
-          "[platform][timing][spikes]") {
-    const SpikeThreshold automatic;
-    CHECK(automatic.at(60) == Approx(50.0));
-    CHECK(automatic.at(144) == Approx(3000.0 / 144));
-    CHECK(automatic.at(0) == Approx(3000.0));
-    CHECK(automatic.describe() == "auto (three frame budgets)");
-    const SpikeThreshold set{25.0};
-    CHECK(set.at(60) == 25.0);
-    CHECK(set.at(240) == 25.0);
-    const SpikeThreshold off{0.0};
-    CHECK(off.at(60) == 0.0);
-    CHECK(off.describe() == "off");
-    CHECK(SpikeThreshold::parse("auto") == automatic);
-    CHECK(SpikeThreshold::parse("off") == off);
-    CHECK(SpikeThreshold::parse("0") == off);
-    CHECK(SpikeThreshold::parse("25") == set);
-    CHECK(SpikeThreshold::parse("12.5")->at(60) == 12.5);
-    CHECK_FALSE(SpikeThreshold::parse("-3").has_value());
-    CHECK_FALSE(SpikeThreshold::parse("soon").has_value());
-    CHECK_FALSE(SpikeThreshold::parse("25ms").has_value());
-    CHECK_FALSE(SpikeThreshold::parse("").has_value());
-}
-
 } // namespace

@@ -8,6 +8,7 @@
 #include "game/effects/ShopFrameLight.h"
 #include "game/hud/InventoryPanel.h"
 #include "game/menu/OptionMenu.h"
+#include "game/menu/TextHighlight.h"
 #include "game/scenes/AfterLevelScene.h"
 #include "game/shop/ShopLayout.h"
 
@@ -22,7 +23,8 @@ constexpr s32 kMagicPerkLevel = 25;
 constexpr s32 kGreaterMagicPerkLevel = 50;
 constexpr Color kMagicLineColor = Color::rgba(255, 128, 192);
 constexpr Color kPriceFlash = Color::rgba(255, 0, 0);
-constexpr Color kPointerHighlight = Color::rgba(130, 0, 234);
+/** The scroll arrows are pictures, not text: under the pointer they take the glow's colour. */
+constexpr Color kPointerHighlight = TextHighlight::kGlow;
 } // namespace
 void AfterLevelScene::pointerTarget(const ShopLane& lane, PointerAction action, const Rect& area,
                                     usize row) {
@@ -46,22 +48,19 @@ void AfterLevelScene::drawContinue(const ShopLane& lane, s32 y) {
     const s32 center = lane.member.player * StatusBoxPainter::kWidth + StatusBoxPainter::kWidth / 2;
     const s32 width = m_text.measure(label, kScale);
     const s32 left = center - width / 2; // Same whole-pixel centering as TextPainter.
-    line(-center, y, label, kScale,
-         pointerHovered(lane, PointerAction::Continue) ? kPointerHighlight : Color::white(), true);
+    // The word keeps its white ink under the pointer; only its glow holds steady.
+    line(-center, y, label, kScale, Color::white(), true,
+         pointerHovered(lane, PointerAction::Continue));
     pointerTarget(lane, PointerAction::Continue,
                   Rect{static_cast<f32>(left), static_cast<f32>(y), static_cast<f32>(width),
                        static_cast<f32>(m_text.lineHeight(kScale))});
 }
 void AfterLevelScene::line(s32 x, s32 y, std::string_view value, f32 scale, Color color,
-                           bool glow) {
-    if (glow && m_glow != nullptr) {
-        m_text.draw(m_canvas, x, y, value,
-                    TextStyle{scale,
-                              Color::rgba(130, 0, 234)
-                                  .withAlpha(pulseOpacity(static_cast<s32>(m_time * 60), 40, 5)),
-                              m_glow});
-    }
-    m_text.draw(m_canvas, x, y, value, TextStyle{scale, color});
+                           bool glow, bool hovered) {
+    const u8 alpha = m_glow != nullptr
+                         ? TextHighlight::glowAlpha(glow, glow && hovered, static_cast<s32>(m_time * 60))
+                         : 0;
+    TextHighlight::draw(m_canvas, m_text, x, y, value, scale, m_glow, alpha, color);
 }
 void AfterLevelScene::image(std::string_view name, s32 x, s32 y, Color color) {
     if (const auto* art = texture(name)) {

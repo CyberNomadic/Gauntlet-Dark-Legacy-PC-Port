@@ -41,16 +41,21 @@ s32 TextPainter::draw(Canvas& canvas, s32 x, s32 y, std::string_view text,
         const auto code = static_cast<u8>(c);
         const BitmapGlyph* glyph = m_font->glyph(code);
         if (glyph != nullptr && glyph->width > 0) {
-            const auto cellWidth = static_cast<f32>(glyph->width);
+            // A glyph cut from part of a cell draws that part where its cell places it.
+            const auto columns =
+                static_cast<f32>(glyph->columns > 0 ? glyph->columns : glyph->width);
+            const auto rows = glyph->rows > 0 ? static_cast<f32>(glyph->rows) : cellHeight;
             const f32 inset = kCellInset * style.scale;
-            const Rect area{static_cast<f32>(penX) + inset - expand,
-                            static_cast<f32>(y) + inset - expand,
-                            (cellWidth - 2.0f * kCellInset) * style.scale + 2.0f * expand,
-                            (cellHeight - 2.0f * kCellInset) * style.scale + 2.0f * expand};
+            const Rect area{static_cast<f32>(penX) + static_cast<f32>(glyph->lead) * style.scale +
+                                inset - expand,
+                            static_cast<f32>(y) + static_cast<f32>(glyph->top) * style.scale +
+                                inset - expand,
+                            (columns - 2.0f * kCellInset) * style.scale + 2.0f * expand,
+                            (rows - 2.0f * kCellInset) * style.scale + 2.0f * expand};
             const Rect uv{(static_cast<f32>(glyph->x) + kCellInset) / sheetWidth,
                           (static_cast<f32>(glyph->y) + kCellInset) / sheetHeight,
-                          (cellWidth - 2.0f * kCellInset) / sheetWidth,
-                          (cellHeight - 2.0f * kCellInset) / sheetHeight};
+                          (columns - 2.0f * kCellInset) / sheetWidth,
+                          (rows - 2.0f * kCellInset) / sheetHeight};
             canvas.draw(*texture, area, uv, style.color);
         }
         penX += advance(code, style.scale);

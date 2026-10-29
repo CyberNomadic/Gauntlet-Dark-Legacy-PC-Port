@@ -416,7 +416,7 @@ TEST_CASE("pause draws the five native rune seal frames on the menus that reques
     for (s32 row = 0; row < 4; ++row) {
         menu.update(1.0 / 60, down);
     }
-    menu.update(1.0 / 60, select); // The smaller Quit Game dialog has no seal.
+    menu.update(1.0 / 60, select); // The smaller Quit Game choice has no seal.
     device.draws.clear();
     menu.render(device, projection, 640, 448);
     CHECK(std::ranges::none_of(device.draws, isSeal));
@@ -570,29 +570,45 @@ TEST_CASE("pause menus route character management and preserve the live party", 
         CHECK(step(back) == PauseOutcome::Running);
         CHECK(menu.update(0.7, {}) == PauseOutcome::Resume);
     }
-    SECTION("quit confirmation") {
+    SECTION("quit game offers the main menu or the desktop, taken at once") {
+        REQUIRE(menu.menu().definition().items.size() == 5);
+        CHECK(menu.menu().definition().items[4].text == "Quit Game");
         for (s32 i = 0; i < 4; ++i) {
             step(down);
         }
         step(select);
-        // The retail dialog (0x8011EB1C) is the abort dialog's parchment with its own
-        // title: No first, Yes, and nothing else on it.
-        const auto& dialog = menu.menu().definition();
-        CHECK(dialog.title == "Quit Game?");
-        REQUIRE(dialog.items.size() == 2);
-        CHECK(dialog.items[0].text == "No");
-        CHECK(dialog.items[1].text == "Yes");
-        CHECK(dialog.body.empty());
-        CHECK(dialog.playerLabel.empty());
-        CHECK_FALSE(dialog.prompts);
-        CHECK(dialog.parchmentFont);
-        CHECK(dialog.fades);
-        CHECK(dialog.x == -256);
-        CHECK(dialog.backdropY == 64);
-        CHECK(dialog.backdropWidth == 320);
-        CHECK(dialog.backdropHeight == 220);
+        // The choice stands on the dialog's parchment with no title: the main menu first,
+        // then the desktop, each within the parchment's width.
+        const auto& choice = menu.menu().definition();
+        CHECK(choice.title.empty());
+        REQUIRE(choice.items.size() == 2);
+        CHECK(choice.items[0].text == "Return to Main Menu");
+        CHECK(choice.items[1].text == "Quit to Desktop");
+        CHECK(choice.parchmentFont);
+        CHECK(choice.fades);
+        CHECK(choice.x == -256);
+        CHECK(choice.backdropY == 64);
+        CHECK(choice.backdropWidth == 320);
+        CHECK(choice.backdropHeight == 220);
+        CHECK(choice.fitWidth == 320);
+        for (usize i = 0; i < choice.items.size(); ++i) {
+            const Rect area = menu.menu().itemArea(i);
+            CHECK(area.x >= menu.menu().backdropArea().x + OptionMenu::kFitMargin);
+            CHECK(area.x + area.width <=
+                  menu.menu().backdropArea().x + 320 - OptionMenu::kFitMargin);
+        }
         menu.update(1, {});
-        CHECK(step(select) == PauseOutcome::Running); // default No
+        CHECK(step(back) == PauseOutcome::Running);
+        CHECK(menu.menu().definition().items.size() == 5); // the main page again
+        for (s32 i = 0; i < 4; ++i) {
+            step(down);
+        }
+        step(select);
+        menu.update(1, {});
+        CHECK(step(select) == PauseOutcome::Running); // Return to Main Menu, no question asked
+        CHECK(menu.update(0.7, {}) == PauseOutcome::Title);
+    }
+    SECTION("quit to desktop is taken at once as well") {
         for (s32 i = 0; i < 4; ++i) {
             step(down);
         }
@@ -600,7 +616,7 @@ TEST_CASE("pause menus route character management and preserve the live party", 
         menu.update(1, {});
         step(down);
         CHECK(step(select) == PauseOutcome::Running);
-        CHECK(menu.update(0.7, {}) == PauseOutcome::Title);
+        CHECK(menu.update(0.7, {}) == PauseOutcome::Desktop);
     }
     SECTION("shop and inventory") {
         // OPTMENU_TOWER: OPT_SHOP opens init_shop(1), OPT_INVENTORY init_shop(2).
@@ -692,6 +708,10 @@ TEST_CASE("level abort uses the retail parchment dialog without character-file w
     const std::array party{PartyMember{}};
     PauseMenu menu;
     REQUIRE(menu.open(device, context, party, 0));
+    // A level's menu: its settings and Quit Level, back to the tower, nothing more.
+    REQUIRE(menu.menu().definition().items.size() == 2);
+    CHECK(menu.menu().definition().items[0].text == strings.get("pause.settings"));
+    CHECK(menu.menu().definition().items[1].text == strings.get("pause.quitLevel"));
     MenuInput down;
     down.down = true;
     MenuInput select;
@@ -712,6 +732,11 @@ TEST_CASE("level abort uses the retail parchment dialog without character-file w
     CHECK(definition.backdropY == 64);
     CHECK(definition.backdropWidth == 320);
     CHECK(definition.backdropHeight == 220);
+    menu.update(1, {});
+    CHECK(menu.update(1.0 / 60, select) == PauseOutcome::Running); // default No
+    CHECK(menu.menu().definition().items.size() == 2);             // the main page again
+    menu.update(1.0 / 60, down);
+    menu.update(1.0 / 60, select);
     menu.update(1, {});
     menu.update(1.0 / 60, down);
     const auto outcome = menu.update(1.0 / 60, select);
@@ -749,10 +774,7 @@ TEST_CASE("the secret world cannot be quit from its menu", "[pause][assets]") {
     CHECK_FALSE(items[1].enabled);
     MenuInput down;
     down.down = true;
-    MenuInput select;
-    select.select = true;
     menu.update(1.0 / 60, down);
-    CHECK(menu.update(1.0 / 60, select) == PauseOutcome::Running);
-    CHECK(menu.menu().definition().items.size() == 2); // still the main page
+    CHECK(menu.menu().selection() == 0); // the greyed row is skipped: nowhere else to go
 }
 } // namespace

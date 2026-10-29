@@ -2,6 +2,7 @@
 #include <numbers>
 #include <vector>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
@@ -190,6 +191,22 @@ TEST_CASE("stopping fades the sound away over the ramp and drops the rest", "[au
     for (const f32 sample : out) {
         CHECK_THAT(sample, WithinAbs(0.0, kEpsilon));
     }
+}
+
+TEST_CASE("a stream tells how much of its sound the mixer has played", "[audio][stream]") {
+    AudioStream stream(AudioStreamDesc{48000, 1}, 48000);
+    CHECK(stream.playedSeconds() == 0.0);
+    const std::vector<f32> pushed(4800, 0.25f);
+    stream.push(pushed);
+    std::vector<f32> out(usize{2} * 480);
+    stream.mixInto(out);
+    CHECK(stream.playedSeconds() == Catch::Approx(0.01));
+    stream.mixInto(out);
+    CHECK(stream.playedSeconds() == Catch::Approx(0.02));
+    // Past the end of what was pushed nothing more is played.
+    std::vector<f32> rest(usize{2} * 48000);
+    stream.mixInto(rest);
+    CHECK(stream.playedSeconds() == Catch::Approx(0.1).margin(0.0001));
 }
 
 } // namespace

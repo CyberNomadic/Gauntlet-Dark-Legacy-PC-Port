@@ -47,6 +47,8 @@ class TextureSet {
 public:
     /** Prefers objects.ngc/textures.ngc; accepts textures.json for inspection exports. */
     bool load(const std::filesystem::path& directory);
+    /** Native adapter input. Empty pixels require an explicit external/no-picture slot. */
+    static TextureSet fromDecoded(std::vector<TextureSetEntry> entries, std::vector<Image> images);
 
     bool loaded() const { return !m_entries.empty(); }
     usize size() const { return m_entries.size(); }

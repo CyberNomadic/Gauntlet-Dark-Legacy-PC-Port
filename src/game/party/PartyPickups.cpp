@@ -39,6 +39,14 @@ constexpr std::array<std::string_view, Relics::kGargoyleKinds> kGargoyleIcons{
     "SM_FANGS", "SM_FEATHERS", "SM_CLAWS"};
 const Vec3 kNowhere{0.0f, -1.0e6f, 0.0f};
 
+} // namespace
+
+bool PartyPickups::storesTurbo(f32 held) {
+    return held >= TurboMeter::kFull * kTurboStoreShare;
+}
+
+namespace {
+
 /** Whether taking `kind` is shown with the pickup's gesture (items.c 3157-3385). */
 bool picksUp(ItemKind kind) {
     return kind == ItemKind::Gold || kind == ItemKind::Keys || kind == ItemKind::Food ||
@@ -46,12 +54,21 @@ bool picksUp(ItemKind kind) {
            (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup);
 }
 
+/** Whether a pickup is the Turbo special, which fills the turbo meter the moment it works. */
+bool turboPickup(const Pickup& pickup) {
+    return pickup.subtype == static_cast<s32>(ItemKind::SpecialPowerup) &&
+           (pickup.flags & powerup::kTurbo) != 0;
+}
+
 ItemTaking judgePickup(CharacterSave& save, const Pickup& pickup, const LevelWorld& world,
-                       const ClassDataSet& classes, bool autoActivateItems) {
+                       const ClassDataSet& classes, bool autoActivateItems, f32 turboHeld) {
     const ClassStats* stats = classes.stats(save.character);
+    // A Turbo taken onto a meter all but full would be spent for nothing: it waits in the
+    // inventory for the selector instead, as it does with Auto-Use off.
     const bool activate =
         autoActivateItems &&
-        (!world.ref().isSecret() || powerupAllowedInChallenge(pickup.subtype, pickup.flags));
+        (!world.ref().isSecret() || powerupAllowedInChallenge(pickup.subtype, pickup.flags)) &&
+        !(turboPickup(pickup) && PartyPickups::storesTurbo(turboHeld));
     auto taking =
         takeItem(save, ItemOffer{pickup.subtype, pickup.amount, pickup.flags, pickup.strength},
                  stats != nullptr ? stats->powerupTime : 1.0f, activate);
@@ -118,8 +135,8 @@ std::vector<Collector> PartyPickups::collectors(std::span<const PlayerRuntime> p
         // PlayerMotion's first sItems sweep (8008760C) uses effectpos + dpos
         // before walls clip the step. effectpos is feet + PDAT coly, not the
         // floor position. Both offsets matter for crystals along a wall/ledge.
-        Vec3 from = canCollect ? actor.stepAim() + (actor.followPoint() - actor.position())
-                               : kNowhere;
+        Vec3 from =
+            canCollect ? actor.stepAim() + (actor.followPoint() - actor.position()) : kNowhere;
         if (canCollect && ComboMove::flies(runtime.combo)) {
             // Pinball flight advances with slide(), not an ordinary input step;
             // it must not retain the last walk's attempted target.
@@ -151,7 +168,7 @@ PickupDecision PartyPickups::takeCurrency(const Pickup& pickup, std::span<Player
     auto& runtime = players[pickup.collector];
     auto& actor = runtime.actor;
     // Gold and keys do not use the selector activation policy.
-    const auto taking = judgePickup(actor.save(), pickup, world, classes, false);
+    const auto taking = judgePickup(actor.save(), pickup, world, classes, false, 0.0f);
     if (!taking.took()) {
         if (const auto lesson = refusalHelp(taking.outcome); lesson && !help(*lesson)) {
             return {.accepted = false};
@@ -259,6 +276,81 @@ void PartyPickups::collect(RenderDevice& device, std::span<PlayerRuntime> player
     }
 }
 
+void PartyPickups::beginTaking(const ItemOffer& offer, const ItemTaking& taking,
+                               PlayerRuntime& runtime, const Services& services) {
+    // Gold, keys, potions, good food and powerups are picked up with a gesture,
+    // out of the tower; bad food is gagged on anywhere.
+    const auto kind = static_cast<ItemKind>(offer.kind);
+    if (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup) {
+        services.hud.focusPickup(runtime.actor, offer.kind, offer.flags);
+    }
+    if (taking.hurt) {
+        runtime.gesture = PlayerDeed::Gag;
+    } else if (!services.world.isTower() && picksUp(kind)) {
+        runtime.gesture = PlayerDeed::Pick;
+    }
+}
+
+void PartyPickups::finishTaking(const ItemTaking& taking, std::string_view itemName,
+                                usize recipient, std::span<PlayerRuntime> players,
+                                const Services& services) {
+    auto& runtime = players[recipient];
+    auto& actor = runtime.actor;
+    if (!taking.card.empty()) {
+        services.hud.pickups().addCard(actor.player(), taking.card);
+    }
+    if (taking.message >= 0 && services.help) {
+        services.help(taking.message, recipient);
+    }
+    if (!taking.sound.empty()) {
+        services.audio.playNamed(taking.sound);
+    } else if (PlayerFigure* figure = runtime.figure.get();
+               (taking.ate || taking.hurt) && figure != nullptr) {
+        const bool pojo = PickupVoices::carriesPojo(actor.save());
+        const PickupVoice cue =
+            m_pickupVoices.food(actor.save().character, itemName, taking.hurt, pojo);
+        if (cue.common) {
+            services.audio.barkNamed(cue.sound);
+        } else {
+            services.audio.bark(figure->voice(), cue.sound);
+        }
+    }
+}
+
+void PartyPickups::presentTaken(const ItemOffer& offer, const ItemTaking& taking,
+                                std::string_view itemName, usize recipient,
+                                std::span<PlayerRuntime> players, const Services& services) {
+    if (!taking.took() || recipient >= players.size() || players[recipient].departed) {
+        return;
+    }
+    beginTaking(offer, taking, players[recipient], services);
+    // Native campaign awards deliberately use no GDL subtype. This feedback
+    // path must never call takeItem, shareRune, or a GDL progression ceremony.
+    if (services.help) {
+        switch (static_cast<ItemKind>(offer.kind)) {
+        case ItemKind::Gold:
+            if (offer.amount >= kGoldLessonAmount) {
+                services.help(kGoldLesson, recipient);
+            }
+            break;
+        case ItemKind::Keys:
+            services.help(services.fixtures.gates().size() > 0 ? kKeyLessonGates
+                                                               : HelpMessages::kChestNeedsKey,
+                          recipient);
+            break;
+        case ItemKind::Potion:
+            for (const s32 lesson : kPotionLessons) {
+                if (services.help(lesson, recipient)) {
+                    break;
+                }
+            }
+            break;
+        default: break;
+        }
+    }
+    finishTaking(taking, itemName, recipient, players, services);
+}
+
 /** Hands a touched item to whoever touched it; nothing when they leave it lying, else what is
  * left of its amount. Crystals are the party's and are dealt with once taken. */
 std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRuntime> players,
@@ -308,25 +400,17 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
     PlayerRuntime& runtime = players[pickup.collector];
     PlayerActor& actor = runtime.actor;
     const auto help = [&](s32 id) { return services.help && services.help(id, pickup.collector); };
-    const auto taking =
-        judgePickup(actor.save(), pickup, world, services.classes, services.autoActivateItems);
+    const auto taking = judgePickup(actor.save(), pickup, world, services.classes,
+                                    services.autoActivateItems, runtime.turbo.held());
     if (!taking.took()) {
         if (const auto id = refusalHelp(taking.outcome)) {
             help(*id);
         }
         return std::nullopt;
     }
-    // Gold, keys, potions, good food and powerups are picked up with a gesture, out of the
-    // tower; bad food is gagged on anywhere.
     const auto kind = static_cast<ItemKind>(pickup.subtype);
-    if (kind >= ItemKind::WeaponPowerup && kind <= ItemKind::SpecialPowerup) {
-        services.hud.focusPickup(actor, pickup.subtype, pickup.flags);
-    }
-    if (taking.hurt) {
-        runtime.gesture = PlayerDeed::Gag;
-    } else if (!world.isTower() && picksUp(kind)) {
-        runtime.gesture = PlayerDeed::Pick;
-    }
+    beginTaking({pickup.subtype, pickup.amount, pickup.flags, pickup.strength}, taking, runtime,
+                services);
     switch (kind) {
     case ItemKind::Potion:
         complainOfTheft(pickup.opener, actor.player(), players, services);
@@ -367,25 +451,11 @@ std::optional<s32> PartyPickups::take(const Pickup& pickup, std::span<PlayerRunt
         break;
     default: break;
     }
-    if (!taking.card.empty()) {
-        services.hud.pickups().addCard(actor.player(), taking.card);
-    }
-    if (taking.message >= 0) {
-        help(taking.message);
-    }
-    if (!taking.sound.empty()) {
-        services.audio.playNamed(taking.sound);
-    } else if (PlayerFigure* figure = runtime.figure.get();
-               (taking.ate || taking.hurt) && figure != nullptr) {
-        const bool pojo = PickupVoices::carriesPojo(actor.save());
-        const PickupVoice cue = m_pickupVoices.food(
-            actor.save().character, world.placedItems().item(pickup.item).name, taking.hurt, pojo);
-        if (cue.common) {
-            services.audio.barkNamed(cue.sound);
-        } else {
-            services.audio.bark(figure->voice(), cue.sound);
-        }
-    }
+    const std::string_view itemName =
+        (taking.ate || taking.hurt) && taking.sound.empty() && runtime.figure != nullptr
+            ? world.placedItems().item(pickup.item).name
+            : std::string_view{};
+    finishTaking(taking, itemName, pickup.collector, players, services);
     return taking.left;
 }
 

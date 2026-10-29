@@ -6,6 +6,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
@@ -37,7 +38,7 @@ bool AdsStream::open(const std::filesystem::path& file, Restoration restoration)
                                 MusicDeclicker::Pass::ShortBursts);
         }
     } catch (const std::exception& e) {
-        log::warn("Audio stream {}: {}", file.string(), e.what());
+        log::warn("Audio stream {}: {}", paths::utf8(file), e.what());
         m_bytes.clear();
         m_info = AdsAudioInfo{};
         return false;

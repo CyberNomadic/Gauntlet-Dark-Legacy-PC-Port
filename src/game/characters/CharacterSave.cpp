@@ -17,6 +17,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "game/characters/NameCheats.h"
 
@@ -141,26 +142,81 @@ LevelRecord levelsFromJson(const Json& object) {
     return levels;
 }
 
+Json legendsJson(const LegendsProgress& progress) {
+    if (!progress.valid()) {
+        throw FormatError("character save: invalid Legends progress");
+    }
+    return Json{{"runestones", progress.runestones},
+                {"shards", progress.shards},
+                {"obelisks", progress.obelisks},
+                {"legendItems", progress.legendItems},
+                {"completedMaps", progress.completedMaps}};
+}
+
+LegendsProgress legendsFromJson(const Json& object) {
+    if (!object.is_object()) {
+        throw FormatError("character save: Legends progress must be an object");
+    }
+    const auto mask = [&](std::string_view field) -> u64 {
+        const auto found = object.find(field);
+        if (found == object.end()) {
+            return 0;
+        }
+        if (found->is_number_unsigned()) {
+            return found->get<u64>();
+        }
+        if (found->is_number_integer() && found->get<s64>() >= 0) {
+            return static_cast<u64>(found->get<s64>());
+        }
+        throw FormatError("character save: invalid Legends collectible mask");
+    };
+    LegendsProgress progress;
+    progress.runestones = mask("runestones");
+    progress.shards = mask("shards");
+    progress.obelisks = mask("obelisks");
+    progress.legendItems = mask("legendItems");
+    if (const auto found = object.find("completedMaps"); found != object.end()) {
+        if (!found->is_array() || found->size() > LegendsProgress::kMaxCompletedMaps) {
+            throw FormatError("character save: invalid Legends completed-map collection");
+        }
+        for (const auto& name : *found) {
+            if (!name.is_string() ||
+                name.get_ref<const std::string&>().size() > LegendsProgress::kMaxMapName) {
+                throw FormatError("character save: invalid Legends map identity");
+            }
+            progress.completedMaps.push_back(name.get<std::string>());
+        }
+    }
+    if (!progress.valid()) {
+        throw FormatError("character save: Legends map identities must be canonical and unique");
+    }
+    return progress;
+}
+
 Json progressJson(const ClassProgress& progress) {
-    return Json{{"experience", progress.experience},
-                {"gold", progress.gold},
-                {"promotedLevel", progress.appearanceLevel()},
-                {"health", progress.health},
-                {"fightAdd", progress.fightAdd},
-                {"armorAdd", progress.armorAdd},
-                {"magicAdd", progress.magicAdd},
-                {"speedAdd", progress.speedAdd},
-                {"crystals", progress.crystals},
-                {"unlocked", progress.unlocked},
-                {"lifetime",
-                 {{"enemiesKilled", progress.lifetime.enemiesKilled},
-                  {"generatorsDestroyed", progress.lifetime.generatorsDestroyed},
-                  {"goldFound", progress.lifetime.goldFound},
-                  {"playSeconds", progress.lifetime.playSeconds},
-                  {"bestStreak", progress.lifetime.bestStreak}}},
-                {"inventory", inventoryJson(progress.inventory)},
-                {"relics", relicsJson(progress.relics)},
-                {"levels", levelsJson(progress.levels)}};
+    return Json{
+        {"experience", progress.experience},
+        {"gold", progress.gold},
+        {"promotedLevel", progress.appearanceLevel()},
+        {"health", progress.health},
+        {"fightAdd", progress.fightAdd},
+        {"armorAdd", progress.armorAdd},
+        {"magicAdd", progress.magicAdd},
+        {"speedAdd", progress.speedAdd},
+        {"crystals", progress.crystals},
+        {"unlocked", progress.unlocked},
+        {"lifetime",
+         {{"enemiesKilled", progress.lifetime.enemiesKilled},
+          {"generatorsDestroyed", progress.lifetime.generatorsDestroyed},
+          {"goldFound", progress.lifetime.goldFound},
+          {"playSeconds", progress.lifetime.playSeconds},
+          {"bestStreak", progress.lifetime.bestStreak}}},
+        {"inventory", inventoryJson(progress.inventory)},
+        {"relics", relicsJson(progress.relics)},
+        {"levels", levelsJson(progress.levels)},
+        {"legends",
+         {{"n64", legendsJson(progress.legendsProgress(LegendsPlatform::N64))},
+          {"dreamcast", legendsJson(progress.legendsProgress(LegendsPlatform::Dreamcast))}}}};
 }
 
 ClassProgress progressFromJson(const Json& object) {
@@ -193,6 +249,17 @@ ClassProgress progressFromJson(const Json& object) {
     }
     if (object.contains("levels")) {
         progress.levels = levelsFromJson(object.at("levels"));
+    }
+    if (const auto found = object.find("legends"); found != object.end()) {
+        if (!found->is_object()) {
+            throw FormatError("character save: Legends campaigns must be an object");
+        }
+        for (const auto& [name, platform] : {std::pair{"n64", LegendsPlatform::N64},
+                                             std::pair{"dreamcast", LegendsPlatform::Dreamcast}}) {
+            if (found->contains(name)) {
+                progress.legendsProgress(platform) = legendsFromJson(found->at(name));
+            }
+        }
     }
     const auto crystals = object.value("crystals", std::vector<s32>{});
     for (usize realm = 0; realm < progress.crystals.size() && realm < crystals.size(); ++realm) {
@@ -289,18 +356,50 @@ bool SaveSlots::open(const std::filesystem::path& directory, usize count) {
     std::error_code error;
     std::filesystem::create_directories(directory, error);
     if (error) {
-        log::warn("Saves: cannot create {}: {}", directory.string(), error.message());
+        log::warn("Saves: cannot create {}: {}", paths::utf8(directory), error.message());
         m_directory.clear();
         m_slots.clear();
         return false;
     }
-    if (m_directory != directory) {
-        m_classUnlocks = 0;
-    }
+    // What is unlocked is read again from the directory: a reward or a lock written by
+    // another instance (the game's, the select screen's) is seen on the next open.
+    m_classUnlocks = 0;
     m_directory = directory;
     m_slots.assign(count, SaveSlotInfo{});
     refresh();
     return true;
+}
+
+bool SaveSlots::lockClasses(u16 mask) {
+    m_classUnlocks &= static_cast<u16>(~mask);
+    if (!opened()) {
+        return false;
+    }
+    bool written = true;
+    for (usize i = 0; i < m_slots.size(); ++i) {
+        if (!m_slots[i].exists) {
+            continue;
+        }
+        const std::filesystem::path file = path(i);
+        try {
+            CharacterSave save = CharacterSave::fromJson(readTextFile(file));
+            if ((save.classUnlock & mask) != 0) {
+                save.classUnlock &= static_cast<u16>(~mask);
+                replaceTextFile(file, save.toJson());
+            }
+        } catch (const std::exception& e) {
+            log::warn("Saves: {}: {}", paths::utf8(file), e.what());
+            written = false;
+        }
+    }
+    const auto file = m_directory / "unlocks.json";
+    try {
+        replaceTextFile(file, Json{{"version", 1}, {"classUnlock", m_classUnlocks}}.dump(2));
+    } catch (const std::exception& e) {
+        log::warn("Unlocks: {}: {}", paths::utf8(file), e.what());
+        written = false;
+    }
+    return written;
 }
 
 std::filesystem::path SaveSlots::path(usize index) const {
@@ -327,7 +426,7 @@ void SaveSlots::refresh() {
             info.color = save.color;
             imported |= save.classUnlock;
         } catch (const std::exception& e) {
-            log::warn("Saves: {}: {}", file.string(), e.what());
+            log::warn("Saves: {}: {}", paths::utf8(file), e.what());
         }
     }
     unlockClasses(imported);
@@ -362,7 +461,7 @@ bool SaveSlots::unlockClasses(u16 mask) {
         return true;
     } catch (const std::exception& e) {
         // Retain earned bits in memory, but never replace corrupt or newer-format data.
-        log::warn("Unlocks: {}: {}", file.string(), e.what());
+        log::warn("Unlocks: {}: {}", paths::utf8(file), e.what());
         return false;
     }
 }
@@ -379,7 +478,7 @@ bool SaveSlots::load(usize index, CharacterSave& out) const {
         out = CharacterSave::fromJson(readTextFile(path(index)));
         return true;
     } catch (const std::exception& e) {
-        log::warn("Saves: {}: {}", path(index).string(), e.what());
+        log::warn("Saves: {}: {}", paths::utf8(path(index)), e.what());
         return false;
     }
 }
@@ -391,7 +490,7 @@ bool SaveSlots::write(usize index, const CharacterSave& save) {
     try {
         replaceTextFile(path(index), save.toJson());
     } catch (const std::exception& e) {
-        log::warn("Saves: {}: {}", path(index).string(), e.what());
+        log::warn("Saves: {}: {}", paths::utf8(path(index)), e.what());
         return false;
     }
     SaveSlotInfo& info = m_slots[index];

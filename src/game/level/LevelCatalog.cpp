@@ -9,6 +9,7 @@
 #include "engine/core/Strings.h"
 #include "engine/core/Types.h"
 #include "engine/io/AssetLocator.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl::game {
 
@@ -48,17 +49,17 @@ bool LevelCatalog::load(const std::filesystem::path& unpackedRoot) {
                                .value_or(unpackedRoot / kWorldDataDirectory);
     std::error_code error;
     if (!std::filesystem::is_directory(directory, error)) {
-        log::warn("Level catalogue: no realm data under {}", directory.string());
+        log::warn("Level catalogue: no realm data under {}", paths::utf8(directory));
         return false;
     }
     for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
-        const auto extension = toLowerAscii(entry.path().extension().string());
+        const auto extension = toLowerAscii(paths::utf8(entry.path().extension()));
         if (extension != ".wad" && extension != ".json") {
             continue;
         }
         // A neighboring export must not duplicate (or replace a corrupt) native realm.
         if (extension == ".json" &&
-            AssetLocator(directory).find(entry.path().stem().string() + ".wad")) {
+            AssetLocator(directory).find(paths::utf8(entry.path().stem()) + ".wad")) {
             continue;
         }
         try {
@@ -67,7 +68,7 @@ bool LevelCatalog::load(const std::filesystem::path& unpackedRoot) {
                 continue;
             }
             Realm realm;
-            realm.file = upper(entry.path().stem().string());
+            realm.file = upper(paths::utf8(entry.path().stem()));
             realm.id = static_cast<s32>(data.realm());
             realm.prefix = data.prefix();
             for (const auto& level : data.levels()) {
@@ -79,7 +80,7 @@ bool LevelCatalog::load(const std::filesystem::path& unpackedRoot) {
                 m_realms.push_back(std::move(realm));
             }
         } catch (const std::exception& e) {
-            log::warn("Level catalogue: {}: {}", entry.path().string(), e.what());
+            log::warn("Level catalogue: {}: {}", paths::utf8(entry.path()), e.what());
         }
     }
     std::ranges::sort(m_realms, {}, &Realm::id);

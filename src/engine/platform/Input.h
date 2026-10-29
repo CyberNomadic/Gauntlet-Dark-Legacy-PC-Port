@@ -87,6 +87,11 @@ enum class Key : u8 {
     MouseLeft,
     MouseRight,
     MouseMiddle,
+    Mouse4, ///< the first side button (GLFW button 3)
+    Mouse5, ///< the second (GLFW button 4)
+    /** A wheel notch, a press that lasts the poll it was seen in: bindable like a button. */
+    ScrollUp,
+    ScrollDown,
     Count
 };
 

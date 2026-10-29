@@ -123,6 +123,27 @@ void PlayScene::suspendForChallenge() {
     }
 }
 
+void PlayScene::suspendForImportedLevel() {
+    if (m_world && m_world->imported()) {
+        m_world->imported()->stopSounds();
+    }
+    // The parked scene keeps its actors and fixtures, but its mixer handles must
+    // not leak into the new scene. This is an offline application boundary.
+    endRecordedAudio();
+    pauseGameplaySounds();
+    m_audio.suspend();
+    m_audio.releaseSounds();
+}
+
+void PlayScene::resumeAfterImportedLevel() {
+    if (!m_open || m_world == nullptr) {
+        return;
+    }
+    m_audio.startMusic(m_context.assets,
+                       m_world->level() != nullptr ? m_world->level()->musicVolume : 1.0f);
+    m_audio.releaseSounds();
+}
+
 void PlayScene::resumeFromChallenge(std::span<const PartyMember> party) {
     m_sim.consoleTravel.reset();
     usize standing = 0;
@@ -149,8 +170,7 @@ void PlayScene::resumeFromChallenge(std::span<const PartyMember> party) {
     m_audio.startMusic(m_context.assets,
                        m_world->level() != nullptr ? m_world->level()->musicVolume : 1.0f);
     m_sim.secretTravel = false;
-    m_transition.cover();
-    m_transition.clearAway();
+    // A hard cut back to the level, as the original's sub-level return is.
 }
 
 } // namespace gdl::game

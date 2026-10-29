@@ -93,7 +93,8 @@ bool ChestsCheckpoint::Chest::operator==(const Chest& other) const {
 }
 
 bool ChestsCheckpoint::State::operator==(const State& other) const {
-    return seed == other.seed && collision == other.collision && layout == other.layout &&
+    return seed == other.seed && seedRemainder == other.seedRemainder &&
+           collision == other.collision && layout == other.layout &&
            chests == other.chests && sameInfos(infos, other.infos) &&
            samePlacements(placements, other.placements);
 }
@@ -174,6 +175,7 @@ struct ChestsCheckpoint::Prepared::Data {
     std::shared_ptr<const u8> binding;
     u64 generation = 0;
     u32 seed = 0;
+    f32 seedRemainder = 0.0f;
     std::vector<ItemInfo> infos;
     std::vector<ItemInstance> placements;
     std::vector<const Chests::Chest*> roster;
@@ -192,6 +194,7 @@ std::optional<ChestsCheckpoint::State> ChestsCheckpoint::checkpoint() const {
     State result;
     result.infos = m_owner.m_infos;
     result.seed = m_owner.m_sim.seed;
+    result.seedRemainder = m_owner.m_sim.seedRemainder;
     result.collision = m_owner.m_collision != nullptr;
     result.layout = m_owner.m_layout != nullptr;
     for (const auto& source : m_owner.m_sim.chests) {
@@ -254,6 +257,7 @@ ChestsCheckpoint::prepareRestore(const State& state) const {
     data->binding = m_owner.m_checkpointBinding;
     data->generation = m_owner.m_checkpointGeneration;
     data->seed = state.seed;
+    data->seedRemainder = state.seedRemainder;
     data->infos = state.infos;
     data->placements = state.placements;
     for (usize index = 0; index < state.chests.size(); ++index) {
@@ -353,6 +357,7 @@ bool ChestsCheckpoint::commitRestore(Prepared&& prepared) {
     auto data = std::move(prepared.m_data);
     m_owner.m_sim.chests.swap(data->chests);
     m_owner.m_sim.seed = data->seed;
+    m_owner.m_sim.seedRemainder = data->seedRemainder;
     ++m_owner.m_checkpointGeneration;
     return true;
 }

@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <limits>
+#include <string_view>
+#include <utility>
 
 #include "engine/io/ByteReader.h"
 
@@ -27,6 +30,69 @@ void real(std::vector<u8>& bytes, f32 value) {
 }
 f32 real(ByteReader& reader) {
     return std::bit_cast<f32>(reader.readU32());
+}
+
+usize sharedPrefix(std::string_view first, std::string_view second) {
+    usize result = 0;
+    while (result < first.size() && result < second.size() && first[result] == second[result]) {
+        ++result;
+    }
+    return result;
+}
+
+void legends(std::vector<u8>& bytes, const LegendsProgress& progress) {
+    for (const u64 mask :
+         {progress.runestones, progress.shards, progress.obelisks, progress.legendItems}) {
+        word(bytes, static_cast<u32>(mask));
+        word(bytes, static_cast<u32>(mask >> 32U));
+    }
+    word(bytes, static_cast<u32>(progress.completedMaps.size()));
+    std::string_view previous;
+    for (const auto& map : progress.completedMaps) {
+        const usize prefix = sharedPrefix(previous, map);
+        bytes.push_back(static_cast<u8>(prefix));
+        bytes.push_back(static_cast<u8>(map.size() - prefix));
+        bytes.insert(bytes.end(), map.begin() + static_cast<std::ptrdiff_t>(prefix), map.end());
+        previous = map;
+    }
+}
+
+bool legends(ByteReader& reader, LegendsProgress& progress) {
+    if (reader.remaining() < 36) {
+        return false;
+    }
+    for (auto* mask :
+         {&progress.runestones, &progress.shards, &progress.obelisks, &progress.legendItems}) {
+        const u64 low = reader.readU32();
+        *mask = low | (u64{reader.readU32()} << 32U);
+    }
+    const usize count = reader.readU32();
+    if (count > LegendsProgress::kMaxCompletedMaps || count > reader.remaining() / 2) {
+        return false;
+    }
+    std::string previous;
+    for (usize i = 0; i < count; ++i) {
+        if (reader.remaining() < 2) {
+            return false;
+        }
+        const usize prefix = reader.readU8();
+        const usize suffix = reader.readU8();
+        if (prefix > previous.size() || suffix == 0 ||
+            prefix + suffix > LegendsProgress::kMaxMapName || suffix > reader.remaining()) {
+            return false;
+        }
+        std::string map = previous.substr(0, prefix);
+        for (const u8 character : reader.readBytes(suffix)) {
+            map.push_back(static_cast<char>(character));
+        }
+        // One representation per sorted map list, not arbitrary equivalent prefix splits.
+        if (sharedPrefix(previous, map) != prefix) {
+            return false;
+        }
+        progress.completedMaps.push_back(map);
+        previous = std::move(map);
+    }
+    return progress.valid();
 }
 } // namespace
 
@@ -67,8 +133,9 @@ bool CharacterProfile::valid() const {
                              [](u16 mask) { return (mask >> Relics::kRuneCount) == 0; }) ||
         p.lifetime.enemiesKilled < 0 || p.lifetime.generatorsDestroyed < 0 ||
         p.lifetime.goldFound < 0 || p.lifetime.bestStreak < 0 ||
-        !std::isfinite(p.lifetime.playSeconds) ||
-        p.lifetime.playSeconds < 0 || p.lifetime.playSeconds > 1e12 || helpSeen.size() > 151 ||
+        !std::isfinite(p.lifetime.playSeconds) || p.lifetime.playSeconds < 0 ||
+        p.lifetime.playSeconds > 1e12 || helpSeen.size() > 151 ||
+        !std::ranges::all_of(p.legends, [](const auto& campaign) { return campaign.valid(); }) ||
         !std::ranges::all_of(helpSeen, [](s32 value) { return value >= 0 && value <= 150; }) ||
         !std::ranges::is_sorted(helpSeen)) {
         return false;
@@ -113,7 +180,7 @@ std::optional<std::vector<u8>> CharacterProfilePacket::encode(const CharacterPro
         return std::nullopt;
     }
     std::vector<u8> bytes;
-    bytes.reserve(kBytes);
+    bytes.reserve(kMinBytes);
     word(bytes, fourcc("GDCP"));
     word(bytes, kVersion);
     for (usize i = 0; i < 8; ++i) {
@@ -173,11 +240,17 @@ std::optional<std::vector<u8>> CharacterProfilePacket::encode(const CharacterPro
     for (const u32 mask : help) {
         word(bytes, mask);
     }
+    for (const auto& campaign : p.legends) {
+        legends(bytes, campaign);
+    }
+    if (bytes.size() > kMaxBytes) {
+        return std::nullopt; // Preserve the whole profile or refuse; never discard progress.
+    }
     return bytes;
 }
 
 std::optional<CharacterProfile> CharacterProfilePacket::decode(std::span<const u8> bytes) {
-    if (bytes.size() != kBytes) {
+    if (bytes.size() < kMinBytes || bytes.size() > kMaxBytes) {
         return std::nullopt;
     }
     ByteReader reader(bytes);
@@ -283,7 +356,12 @@ std::optional<CharacterProfile> CharacterProfilePacket::decode(std::span<const u
             }
         }
     }
-    if (!profile.valid()) {
+    for (auto& campaign : p.legends) {
+        if (!legends(reader, campaign)) {
+            return std::nullopt;
+        }
+    }
+    if (!reader.atEnd() || !profile.valid()) {
         return std::nullopt;
     }
     restoreNameForm(profile.progress.inventory, profile.name);

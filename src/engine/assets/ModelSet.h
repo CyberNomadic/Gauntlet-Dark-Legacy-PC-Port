@@ -25,6 +25,8 @@ class ModelSet {
 public:
     /** Loads objects.ngc from the supplied directory. */
     bool load(const std::filesystem::path& directory);
+    /** Takes meshes decoded by a platform adapter, preserving native slot order. */
+    static ModelSet fromDecoded(std::vector<ModelSetEntry> entries, std::vector<Mesh> meshes);
 
     bool loaded() const { return !m_entries.empty(); }
     usize size() const { return m_entries.size(); }

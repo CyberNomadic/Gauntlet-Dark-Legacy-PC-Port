@@ -48,7 +48,9 @@ struct WorldObject {
     bool noCollision = false; ///< its collision triangles are decoration only
 
     /** Level flags. */
-    static constexpr u32 kPrelit = 0x2;       ///< lit by its mesh's vertex colours, not the lights
+    /** Set on most level objects; the original's draw never reads it. A mesh's own colour
+     * stream decides its shading (WorldScene::shadeOf). */
+    static constexpr u32 kPrelit = 0x2;
     static constexpr u32 kFloor = 0x4;        ///< floor surface with projectile impact clearance
     static constexpr u32 kParticles = 0x800;  ///< a particle system's marker, never drawn
     static constexpr u32 kAnimated = 0x1000;  ///< keyframed, or under something keyframed
@@ -64,7 +66,6 @@ struct WorldObject {
     static constexpr u32 kAdditive = object_flags::kAdditive;
 
     bool particles() const { return (flags & kParticles) != 0; }
-    bool prelit() const { return (flags & kPrelit) != 0; }
     bool sorted() const { return (objectFlags & kSorted) != 0; }
     bool additive() const { return (objectFlags & kAdditive) != 0; }
 };
@@ -149,6 +150,13 @@ class WorldLayout {
 public:
     /** Reads WORLDS.PS2, or a legacy world.json if no native file exists. */
     bool load(const std::filesystem::path& directory);
+
+    /** Builds validated common metadata from a native adapter, without an intermediate
+     * manifest. Flags must already have common WorldObject semantics, not platform bits.
+     * A locator-only layout is permitted; loaded() retains its mesh-roster meaning. */
+    static WorldLayout fromDecoded(std::vector<WorldObject> objects,
+                                   std::vector<WorldLocator> locators, Vec3 minBounds,
+                                   Vec3 maxBounds);
 
     bool loaded() const { return !m_objects.empty(); }
     const std::vector<WorldObject>& objects() const { return m_objects; }

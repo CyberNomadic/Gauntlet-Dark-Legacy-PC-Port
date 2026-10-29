@@ -18,8 +18,9 @@ void PlayScene::updateSwitchCutscene(s32 ticks, f32 seconds) {
     m_fixtures.syncFloors();
     m_opponents.syncFloors();
     const auto subjects = PartyMotion::step(
-        m_players, {}, true, bossCameraOn() ? m_sim.bossCamera.yaw() : m_camera.yaw(), ticks,
-        seconds, m_world->collision(), motionEvents());
+        m_players, {}, true,
+        movementYaws(bossCameraOn() ? m_sim.bossCamera.yaw() : m_camera.yaw()), ticks, seconds,
+        m_world->collision(), motionEvents());
     m_sim.shake.update(ticks);
     m_attacks.updateProjectiles(seconds, m_players, attackTargets());
     m_sim.projectilesAdvanced = seconds > 0;
@@ -39,6 +40,9 @@ void PlayScene::updateSwitchCutscene(s32 ticks, f32 seconds) {
             }
         }
         m_camera.snapAttention(standing, m_world->cameraRange());
+        if (m_sim.soloCameras) {
+            snapSeatCameras(subjects);
+        }
     }
     updateAmbience();
 }

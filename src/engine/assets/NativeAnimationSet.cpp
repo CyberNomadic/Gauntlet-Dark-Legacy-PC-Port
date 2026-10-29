@@ -7,6 +7,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Strings.h"
 #include "engine/io/File.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/AnimationTree.h"
 
@@ -70,34 +71,39 @@ TreeInfo nativeTree(formats::TreeDefinition source) {
 
 } // namespace
 
+AnimationSet AnimationSet::fromDecoded(formats::AnimationFile source) {
+    AnimationSet result;
+    for (auto& animation : source.textureAnimations) {
+        TextureAnimationInfo info;
+        info.name = std::move(animation.name);
+        info.frameName = std::move(animation.frameName);
+        info.texture = animation.texture;
+        info.source = animation.source;
+        info.frames = animation.frames;
+        info.start = animation.start;
+        info.rate = animation.rate;
+        info.offset = animation.offset;
+        info.flag = animation.flag;
+        result.m_textureAnimations.push_back(std::move(info));
+    }
+    for (const auto& particle : source.particles) {
+        result.m_particles.push_back(nativeParticle(particle));
+    }
+    for (auto& tree : source.trees) {
+        result.m_trees.push_back(nativeTree(std::move(tree)));
+    }
+    for (u32 i = 0; i < result.m_trees.size(); ++i) {
+        result.m_byName.try_emplace(result.m_trees[i].name, i);
+    }
+    return result;
+}
+
 bool AnimationSet::loadNative(const std::filesystem::path& file) {
     try {
-        auto source = formats::AnimationFile::parse(readFile(file));
-        for (auto& animation : source.textureAnimations) {
-            TextureAnimationInfo info;
-            info.name = std::move(animation.name);
-            info.frameName = std::move(animation.frameName);
-            info.texture = animation.texture;
-            info.source = animation.source;
-            info.frames = animation.frames;
-            info.start = animation.start;
-            info.rate = animation.rate;
-            info.offset = animation.offset;
-            info.flag = animation.flag;
-            m_textureAnimations.push_back(std::move(info));
-        }
-        for (const auto& particle : source.particles) {
-            m_particles.push_back(nativeParticle(particle));
-        }
-        for (auto& tree : source.trees) {
-            m_trees.push_back(nativeTree(std::move(tree)));
-        }
-        for (u32 i = 0; i < m_trees.size(); ++i) {
-            m_byName.try_emplace(m_trees[i].name, i);
-        }
+        *this = fromDecoded(formats::AnimationFile::parse(readFile(file)));
         return !m_trees.empty() || !m_textureAnimations.empty();
     } catch (const std::exception& e) {
-        log::warn("Native animation set {}: {}", file.string(), e.what());
+        log::warn("Native animation set {}: {}", paths::utf8(file), e.what());
         m_trees.clear();
         m_textureAnimations.clear();
         m_particles.clear();

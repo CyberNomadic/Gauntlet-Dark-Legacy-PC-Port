@@ -9,6 +9,7 @@
 
 #include "engine/core/Error.h"
 #include "engine/core/Types.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
@@ -24,7 +25,7 @@ std::optional<std::filesystem::path> matchComponent(const std::filesystem::path&
     std::error_code ec;
     std::optional<std::filesystem::path> loose;
     for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
-        const std::string name = entry.path().filename().string();
+        const std::string name = paths::utf8(entry.path().filename());
         if (name == component) {
             return entry.path();
         }
@@ -48,7 +49,7 @@ AssetLocator::AssetLocator(std::filesystem::path root) : m_root(std::move(root))
     if (!error && absolute != absolute.root_path()) {
         auto resolved = absolute.root_path();
         for (const auto& component : absolute.relative_path()) {
-            const auto found = matchComponent(resolved, component.string());
+            const auto found = matchComponent(resolved, paths::utf8(component));
             if (!found) {
                 return;
             }
@@ -83,7 +84,7 @@ std::optional<std::filesystem::path> AssetLocator::find(std::string_view relativ
 std::filesystem::path AssetLocator::require(std::string_view relative) const {
     const auto found = find(relative);
     if (!found.has_value()) {
-        throw FileError(std::format("asset {} not found under {}", relative, m_root.string()));
+        throw FileError(std::format("asset {} not found under {}", relative, paths::utf8(m_root)));
     }
     return *found;
 }

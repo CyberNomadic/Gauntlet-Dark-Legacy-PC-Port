@@ -48,6 +48,8 @@ struct PlayScene::LocalSnapshot::Data {
     SoundCueToken relicCue;
     SoundCueToken promotionCue;
     std::optional<WorldCamera> previousCamera;
+    SeatCameraStates seatCameras{};
+    std::optional<WorldCamera> previousSeatView; ///< this machine's view alone, never digested
     bool previousBossCamera = false;
     bool namesHeld = false;
 };
@@ -97,7 +99,8 @@ bool PlayScene::appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot
                                       sumnerVisit, promotion, relics, bossSequence, audio,
                                       challengeHud, camera, transition, relicSpeech,
                                       promotionSpeech, relicCue, promotionCue, previousCamera,
-                                      previousBossCamera, namesHeld] = *data;
+                                      seatCameras, previousSeatView, previousBossCamera,
+                                      namesHeld] = *data;
     }
     measured("control", [&] {
         digest.string("PlayScene.native.8");
@@ -174,6 +177,7 @@ bool PlayScene::appendSceneDigest(NativeStateDigest& digest, const LocalSnapshot
                       data ? data->relicCue : m_relicVoice.cue,
                       data ? data->promotionCue : m_promotionVoice.cue,
                       data ? data->previousCamera : m_previousCamera,
+                      data ? data->seatCameras : seatCameraStates(),
                       data ? data->previousBossCamera : m_previousBossCamera,
                       data ? data->namesHeld : m_names.held());
         return digest.good();
@@ -243,6 +247,8 @@ bool PlayScene::saveLocal(LocalSnapshot& saved) const {
     data.relicCue = m_relicVoice.cue;
     data.promotionCue = m_promotionVoice.cue;
     data.previousCamera = m_previousCamera;
+    data.seatCameras = seatCameraStates();
+    data.previousSeatView = m_previousSeatView;
     data.previousBossCamera = m_previousBossCamera;
     data.namesHeld = m_names.held();
     data.owner = this;
@@ -345,6 +351,10 @@ bool PlayScene::restoreLocal(const LocalSnapshot& saved) {
     m_relicVoice.cue = data.relicCue;
     m_promotionVoice.cue = data.promotionCue;
     m_previousCamera = data.previousCamera;
+    for (usize i = 0; i < m_seatCameras.size(); ++i) {
+        m_seatCameras[i].restoreLocal(data.seatCameras[i]);
+    }
+    m_previousSeatView = data.previousSeatView;
     m_previousBossCamera = data.previousBossCamera;
     m_names.restoreHeld(data.namesHeld);
     return true;

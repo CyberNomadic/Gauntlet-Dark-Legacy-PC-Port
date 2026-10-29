@@ -1,3 +1,4 @@
+#include "engine/platform/Paths.h"
 #include "engine/render/vulkan/VulkanPipeline.h"
 
 #include <array>
@@ -207,7 +208,7 @@ VulkanPipeline::~VulkanPipeline() {
 VkShaderModule VulkanPipeline::loadShaderModule(const std::filesystem::path& path) const {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file) {
-        log::error("Cannot open shader binary {}", path.string());
+        log::error("Cannot open shader binary {}", paths::utf8(path));
         GDL_FATAL("Missing shader binary");
     }
     const std::streamsize size = file.tellg();

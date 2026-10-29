@@ -1,0 +1,32 @@
+Amuse native MusyX engine
+Source: https://github.com/derselbst/amuse/tree/503ad90e9857584f23d3389982f4883fa3190a5d
+
+Native playback fixes from upstream commits:
+https://github.com/derselbst/amuse/commit/9e34e4c87a1adbf7edd666bca5885d3c5ec99b9c
+https://github.com/derselbst/amuse/commit/a7f7d64e8f83253e134ef3bdf0aecbdc557a4d2b
+The standalone Nowide conversion call also passes its string through c_str().
+Local native-playback changes implement the N64 REV_LEVEL sound-macro command
+and reject unsupported commands or invalid macro counters instead of crashing.
+The patch and its verified source hashes are in cmake/GdlPatchAmuseEffects.cmake.
+
+The MIT License
+
+Copyright (c) 2015-2018 Antidote / Jackoalan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

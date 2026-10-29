@@ -264,7 +264,11 @@ public:
     /** The level's harmful surfaces, borrowed until close. */
     void setHazards(const HazardSurfaces* hazards) { m_hazards = hazards; }
     /** What the camera takes in, for what is on screen; none takes everything in. */
-    void setView(std::optional<ViewVolume> view) { m_simulation.view = view; }
+    void setView(std::optional<ViewVolume> view) {
+        m_simulation.view = view ? std::optional{ViewSet::of(*view, Vec3{0.0f})} : std::nullopt;
+    }
+    /** What the party's cameras take in together, under solo cameras. */
+    void setViews(const std::optional<ViewSet>& views) { m_simulation.view = views; }
     /** The swarm's aggression for the coming step, births and drawing: quicker, tougher,
      * and past the bravery line red with an aura. Set before each step; not kept. */
     void setAggression(const SwarmAggression& aggression) { m_aggression = aggression; }
@@ -427,8 +431,12 @@ public:
                   f32 alpha = 1, const Texture* deathSkin = nullptr, bool dying = false);
     usize count() const; ///< live, dying included
     s32 most() const { return m_simulation.most; } ///< the slots in play, the level's cap
-    /** Lifts the cap to the whole pool for the rest of the level: a frenzied swarm's. */
+    /** Lifts the cap to the whole pool while the swarm is frenzied. */
     void widenPool() { m_simulation.most = kMost; }
+    /** Brings the cap back toward the level's own, as far as the bodies past it allow: the
+     * frenzy over, the swarm thins back to what the level allows as its extras fall. */
+    void narrowPool();
+    s32 levelCap() const { return m_levelCap; }
     s32 kindOf(s32 id) const;
     s32 tierOf(s32 id) const;
     s32 generatorOf(s32 id) const;
@@ -583,7 +591,7 @@ public:
         Vec2 contactGridOrigin{0};
         f32 contactGridInverseWidth = 0;
         s32 bomber = -1;
-        std::optional<ViewVolume> view;
+        std::optional<ViewSet> view;
         s32 inView = 0;
         u32 frame = 0;
         s32 pendingTicks = 0;
@@ -708,6 +716,7 @@ private:
 
     friend class OpponentCombatCheckpoint;
     RenderDevice* m_device = nullptr;
+    s32 m_levelCap = kMost; ///< the cap the level opened with, never simulation state
     std::shared_ptr<const u8> m_restoreOwner = std::make_shared<const u8>(0);
     u64 m_restoreGeneration = 0;
     std::filesystem::path m_root;
@@ -737,7 +746,7 @@ private:
         f32 contactGridInverseWidth = 0;
         Mt19937 random;
         s32 bomber = -1; ///< the lit suicide bomber the rest run from this tick
-        std::optional<ViewVolume> view;
+        std::optional<ViewSet> view;
         s32 inView = 0;
         u32 frame = 0;
         s32 pendingTicks = 0;

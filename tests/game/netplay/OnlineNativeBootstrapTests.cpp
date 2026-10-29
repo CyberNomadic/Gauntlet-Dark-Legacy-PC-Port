@@ -183,8 +183,7 @@ struct Network {
                                                contract->rules.autoAim,
                                                contract->identity.build,
                                                contract->identity.content,
-                                               contract->identity.data,
-                                               contract->rules.aggressorMode};
+                                               contract->identity.data};
         auto result = NativePlaySetup::create(local, session.room()->settings, *session.party(),
                                               options, native);
         REQUIRE(result);
@@ -263,7 +262,6 @@ TEST_CASE("native production bootstrap agrees full setup before opening any matc
     rules.autoMelee = true;
     rules.autoActivateItems = false;
     rules.expandedShop = true;
-    rules.aggressorMode = false;
     rules.startupDelay = 0;
     network->configure(rules);
     network->start();

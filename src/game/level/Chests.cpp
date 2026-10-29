@@ -38,7 +38,7 @@ bool Chests::appendSimulationDigest(NativeStateDigest& digest, const Simulation&
     for (const auto& info : m_infos) {
         digest.fields<19>(info);
     }
-    digest.fields<2>(state);
+    digest.fields<3>(state);
     return digest.good();
 }
 
@@ -205,6 +205,7 @@ void Chests::clear() {
     m_sim.chests.clear();
     m_infos.clear();
     m_sim.seed = 0;
+    m_sim.seedRemainder = 0.0f;
     m_collision = nullptr;
     m_layout = nullptr;
 }
@@ -217,6 +218,12 @@ void Chests::setPlayerCount(s32 players) {
 
 std::vector<ChestEvent> Chests::update(f32 seconds, std::span<const ChestVisitor> party) {
     syncFloors();
+    // The shared seed walks on with the frames (sItemRandSeed + 1 a frame), so a random
+    // chest cycles through its choices until it is opened, as the X-ray overlay shows.
+    m_sim.seedRemainder += std::max(seconds, 0.0f) * kSeedTicksPerSecond;
+    const f32 seedTicks = std::floor(m_sim.seedRemainder);
+    m_sim.seedRemainder -= seedTicks;
+    m_sim.seed += static_cast<u32>(seedTicks);
     std::vector<ChestEvent> events;
     std::vector<s32> goldCapacity;
     goldCapacity.reserve(party.size());
@@ -323,6 +330,7 @@ bool Chests::transmute(usize index, s32 record, f32 power) {
         return false;
     }
     chest.contents = record;
+    chest.previewContents = -1; // an X-ray overlay shows the new contents at once
     chest.wobble = std::trunc(kWobblePerPower * power);
     for (auto& other : m_sim.chests) {
         if (other.info == chest.info) {
@@ -359,6 +367,7 @@ bool Chests::changeContents(usize index, s32 record, RenderDevice& device,
         return false;
     }
     chest.contents = record;
+    chest.previewContents = -1; // an X-ray overlay shows the new contents at once
     if (!figure.empty() && scope.findTree(figure).has_value()) {
         const Mat4 placement = chest.figure.transform();
         const ItemInstance& instance = layout.itemInstances()[static_cast<usize>(chest.instance)];
@@ -503,6 +512,20 @@ void Chests::draw(RenderDevice& device, const Mat4& clip, const WorldLighting& l
                               camera, TreeModel::Pass::All, presentationAlpha);
         }
     }
+}
+
+
+bool Chests::setLocked(usize index, bool locked) {
+    if (index >= m_sim.chests.size()) {
+        return false;
+    }
+    Chest& chest = m_sim.chests[index];
+    if (chest.gone || chest.state != kShut) {
+        return false;
+    }
+    chest.locked = locked;
+    chest.refusalLeft = 0.0f;
+    return true;
 }
 
 } // namespace gdl::game

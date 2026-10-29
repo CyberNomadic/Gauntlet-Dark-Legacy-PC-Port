@@ -8,6 +8,10 @@
 
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
+#include "engine/platform/Paths.h"
+
+#include "game/menu/MainMenuFactory.h"
+#include "game/menu/TextHighlight.h"
 
 namespace gdl::game {
 
@@ -41,7 +45,9 @@ constexpr s32 kMenuStart = 11;
 constexpr s32 kMenuOptions = 12;
 constexpr s32 kMenuNetplay = 13;
 constexpr s32 kMenuLocal = 14;
-constexpr s32 kTitleMenuY = 304;
+constexpr s32 kMenuQuit = 15;
+constexpr s32 kConfirmYes = 1;
+constexpr usize kQuitRow = 2; ///< where Quit to Desktop stands in the title menu
 constexpr Rect kOptionsBurnArea{290.0f, 142.0f, 224.0f, 172.0f};
 constexpr Color kGlowColor = Color::rgba(130, 0, 234);
 
@@ -106,6 +112,7 @@ void TitleScene::close() {
     m_music = kNoSound;
     m_titleMenu.close();
     m_startMenu = false;
+    m_quitConfirm = false;
     m_optionsMenu.close();
     m_optionsMenu = SettingsMenu{};
     m_fire.reset();
@@ -126,7 +133,7 @@ bool TitleScene::loadResources(RenderDevice& device, const std::filesystem::path
     if (!m_titleTextures.load(unpackedRoot / kTitleDirectory) ||
         !m_staticTextures.load(unpackedRoot / kStaticDirectory)) {
         log::warn("Title screen: unpacked textures not found under {} (run gdlunpack)",
-                  unpackedRoot.string());
+                  paths::utf8(unpackedRoot));
         return false;
     }
     if (!m_font32.load(unpackedRoot / kFontFile, kFont32SpaceWidth)) {
@@ -180,7 +187,8 @@ void TitleScene::loadSounds(const std::filesystem::path& unpackedRoot) {
     }
     if (!m_commonSounds.load(unpackedRoot / kCommonSounds) ||
         !m_selectSounds.load(unpackedRoot / kSelectSounds)) {
-        log::warn("Title screen: unpacked sound banks not found under {}", unpackedRoot.string());
+        log::warn("Title screen: unpacked sound banks not found under {}",
+                  paths::utf8(unpackedRoot));
     }
 }
 
@@ -325,9 +333,27 @@ TitleOutcome TitleScene::step(s32 ticks, const MenuInput& rawInput) {
 
     if (m_titleMenu.isOpen()) {
         const MenuEvent event = m_titleMenu.update(input, ticks);
+        if (m_quitConfirm) {
+            // Asked, the player quits with Yes; No or backing out returns to the menu.
+            if (event.action == MenuAction::Choice && event.code == kConfirmYes) {
+                return TitleOutcome::Quit;
+            }
+            if (event.action == MenuAction::Choice || event.action == MenuAction::Back) {
+                playMenuSound(kSoundSelect);
+                openTitleMenu();
+                m_titleMenu.focus(kQuitRow);
+            } else if (event.action == MenuAction::Moved) {
+                playMenuSound(kSoundMove);
+            }
+            m_idle = kIdleTicks;
+            return TitleOutcome::Running;
+        }
         if (event.action == MenuAction::Choice && event.code == kMenuStart) {
             playMenuSound(kSoundSelect);
             openTitleMenu(true);
+        } else if (event.action == MenuAction::Choice && event.code == kMenuQuit) {
+            playMenuSound(kSoundSelect);
+            openQuitConfirm();
         } else if (event.action == MenuAction::Choice && event.code == kMenuLocal) {
             m_titleMenu.close();
             m_loadingTimer = kLoadingTicks;
@@ -365,16 +391,26 @@ TitleOutcome TitleScene::step(s32 ticks, const MenuInput& rawInput) {
 
 void TitleScene::openTitleMenu(bool startMenu) {
     m_startMenu = startMenu;
-    MenuDefinition menu;
-    menu.x = kTextCenterX;
-    menu.y = kTitleMenuY;
+    m_quitConfirm = false;
+    std::vector<MainMenuEntry> entries;
     if (startMenu) {
-        menu.items = {{std::string(text("menu.local")), kMenuLocal},
-                      {std::string(text("menu.netplay")), kMenuNetplay}};
+        entries = {{std::string(text("menu.local")), kMenuLocal},
+                   {std::string(text("menu.netplay")), kMenuNetplay}};
     } else {
-        menu.items = {{std::string(text("menu.start")), kMenuStart},
-                      {std::string(text("menu.options")), kMenuOptions}};
+        entries = {{std::string(text("menu.start")), kMenuStart},
+                   {std::string(text("menu.options")), kMenuOptions},
+                   {std::string(text("menu.quit")), kMenuQuit}};
     }
+    m_titleMenu.open(MainMenuFactory::build(entries, m_text, m_screen), m_text, m_screen);
+}
+
+/** The retail yes/no parchment asks before the game quits to the desktop. */
+void TitleScene::openQuitConfirm() {
+    m_startMenu = false;
+    m_quitConfirm = true;
+    auto menu =
+        MenuDefinition::confirmation(std::string(text("menu.areYouSure")),
+                                     std::string(text("pause.no")), std::string(text("pause.yes")));
     menu.startSelects = true;
     m_titleMenu.open(menu, m_text, m_screen);
 }
@@ -393,7 +429,7 @@ void TitleScene::openOptionsMenu() {
     m_optionsMenu.open(m_context.config != nullptr ? *m_context.config : GameConfig{},
                        m_context.strings, m_context.saveSettings, m_text, m_screen, menu,
                        SettingsMenu::Scope::Title, m_context.previewAudio, {},
-                       m_context.displayOptions, m_context.previewVideo);
+                       m_context.displayOptions, m_context.previewVideo, {}, m_context.renderer);
 }
 
 /** Backing out hands the scroll to the burn effect while the text fades out. */
@@ -416,12 +452,10 @@ void TitleScene::closeOptionsMenu() {
 }
 
 void TitleScene::drawGlowText(s32 x, s32 y, std::string_view label) {
-    TextStyle glow;
-    glow.color = kGlowColor.withAlpha(pulseOpacity(m_time, kGlowTextRadius, kGlowTextHold));
-    glow.texture = m_menuTextures.glow != nullptr ? m_menuTextures.glow : m_menuTextures.font;
-    glow.expand = OptionMenu::kGlowExpand;
-    m_text.draw(m_canvas, x, y, label, glow);
-    m_text.draw(m_canvas, x, y, label, TextStyle{});
+    TextHighlight::draw(m_canvas, m_text, x, y, label, 1.0f,
+                        m_menuTextures.glow != nullptr ? m_menuTextures.glow : m_menuTextures.font,
+                        pulseOpacity(m_time, kGlowTextRadius, kGlowTextHold), Color::white(),
+                        OptionMenu::kGlowExpand);
 }
 
 void TitleScene::render(RenderDevice& device, const Mat4& frameProjection, f32 frameWidth,

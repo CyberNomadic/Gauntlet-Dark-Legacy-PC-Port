@@ -28,7 +28,6 @@ struct HintMenuArt {
 struct HintMenuLabels {
     std::string title;
     std::vector<MenuItem> topics; ///< what can be asked, each with the code it answers to
-    std::string back;
     std::string select;
     std::string player; ///< whose scroll it is, e.g. "Player 1"
 };

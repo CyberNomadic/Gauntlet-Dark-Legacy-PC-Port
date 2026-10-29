@@ -68,10 +68,13 @@ struct MenuColors {
 struct MenuDefinition {
     template <class Visitor>
     friend void visitNativeState(Visitor& digest, const MenuDefinition& value) {
-        digest.template fields<33>(value);
+        digest.template fields<38>(value);
     }
     /** Shared parchment menu: red ink, purple selection glow, no instruction footer. */
     static MenuDefinition parchment();
+    /** The retail yes/no dialog (0x8011EB1C "Quit Game?", 0x8011E8E0 "Abort Level?"): a
+     * small centred parchment fading in, with only `title` and then `no` and `yes`, no first. */
+    static MenuDefinition confirmation(std::string title, std::string no, std::string yes);
 
     std::string title; ///< drawn above the backdrop; empty for a bare menu
     f32 titleScale = 1.2f;
@@ -81,6 +84,13 @@ struct MenuDefinition {
     f32 cursorScale = 1.0f; ///< relative size of either the model or fallback arrow
     std::vector<MenuItem> items;
     std::vector<Vec2> itemPositions; ///< optional explicit layout, e.g. a horizontal action row
+    /** How many rows of the column show at once; 0 shows them all. A longer column scrolls
+     * behind the window as the selection moves, by the wheel too, with arrows marking what
+     * lies above and below. */
+    s32 visibleRows = 0;
+    /** Explicit places for the last items, an action row standing outside the column and
+     * its window; as many of them as the column has none of. */
+    std::vector<Vec2> tailPositions;
     s32 valueX = 0;
     s32 valueWidth = 0;
     bool showCursor = true;
@@ -109,6 +119,14 @@ struct MenuDefinition {
     f32 bodyScale = 1.0f;
     s32 bodyY = -1;
     s32 bodyGap = 0;
+    /** The width the rows and the title must stay within, with a margin at either side: a
+     * dialog's parchment, the screen. Rows wider than it shrink to fit; 0 asks nothing. */
+    s32 fitWidth = 0;
+    /** Pixels between the column's rows, besides each row's own spacing. */
+    s32 rowGap = 0;
+    /** A column centred (y -1) sits in the middle of the backdrop, under its title, rather
+     * than of the screen: a dialog's rows stand evenly on its parchment. */
+    bool centreOnBackdrop = false;
 };
 
 enum class MenuAction : u8 { None, Moved, Choice, Back, Closed };
@@ -144,14 +162,17 @@ struct MenuTextures {
 class OptionMenu {
     template <class Visitor>
     friend void visitNativeState(Visitor& digest, const OptionMenu& value) {
-        const auto& [definition, screen, open, backdropReleased, selection, time, finishTimer,
-                     lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale, backdrop,
-                     iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas, alternateX,
-                     lastPointer, hoverPart] = value;
-        digest.values(definition, screen, open, backdropReleased, selection, time, finishTimer,
-                      lineHeight, columnX, columnY, columnWidth, columnHeight, iconScale, backdrop,
-                      iconY, iconTimer, iconDrawY, iconRotation, bodyTop, itemAreas, alternateX,
-                      lastPointer, hoverPart);
+        const auto& [definition, screen, open, backdropReleased, selection, scroll, time,
+                     finishTimer, lineHeight, columnX, columnY, columnWidth, columnRight,
+                     columnHeight, titleBottom, iconScale, backdrop, iconY, iconTimer, iconDrawY,
+                     iconRotation, bodyTop, itemAreas, alternateX, lastPointer, hoverPart,
+                     dragging, painter] = value;
+        static_cast<void>(painter); // borrowed presentation, never simulation state
+        digest.values(definition, screen, open, backdropReleased, selection, scroll, time,
+                      finishTimer, lineHeight, columnX, columnY, columnWidth, columnRight,
+                      columnHeight, titleBottom, iconScale, backdrop, iconY, iconTimer,
+                      iconDrawY, iconRotation, bodyTop, itemAreas, alternateX, lastPointer,
+                      hoverPart, dragging);
     }
 
 public:
@@ -164,16 +185,25 @@ public:
     static constexpr s32 kPlayerTagMargin = 34;
     static constexpr s32 kIconOffsetX = -16;
     static constexpr s32 kGlowExpand = 2;
+    static constexpr s32 kFitMargin = 16; ///< kept clear inside `fitWidth` at either side
+    static constexpr s32 kDialogRowGap = 10; ///< between a dialog's rows
+    /** The lowest a row may stand under a title: the title's cell, by the painter's font. */
+    s32 titleBottom() const { return m_titleBottom; }
     static constexpr f32 kPromptScale = 0.667f;
     static constexpr f32 kIconWorldScale = 0.05f; ///< the arrow model's scale in the original
     static constexpr f32 kIconDepth = 1.1f;       ///< its distance from the camera
+    static constexpr f32 kScrollMarkSize = 4;     ///< the arrows marking rows beyond the window
+    static constexpr s32 kScrollMarkGap = 3;      ///< between a mark and the column's edge
+    static constexpr f32 kScrollBarWidth = 3;     ///< the bar between the marks
+    static constexpr f32 kHoverMotion = 2;        ///< how far the pointer moves before it chooses
 
     /** Pixels per model unit for the selection arrow on `screen`. */
     static f32 iconPixelsPerUnit(const MenuScreen& screen);
 
-    /** Opens the menu and lays it out with the painter's font on `screen`. */
+    /** Opens the menu and lays it out with the painter's font on `screen`, the window
+     * starting at column row `scroll` as far as the selection stays in it. */
     void open(const MenuDefinition& definition, const TextPainter& painter,
-              const MenuScreen& screen, s32 selection = 0);
+              const MenuScreen& screen, s32 selection = 0, s32 scroll = 0);
 
     /** Starts the fade-out for fading menus; removes others at once. */
     void close();
@@ -200,12 +230,26 @@ public:
 
     const MenuDefinition& definition() const { return m_definition; }
     s32 selection() const { return m_selection; }
+    /** The first column row in the window. */
+    s32 scroll() const { return m_scroll; }
+    /** How many column rows the window shows. */
+    s32 windowRows() const;
+    /** Whether an item is in view: in the window, or placed outside the column. */
+    bool shown(usize item) const;
+    /** Moves the selection to `item` and brings the window to it. */
     void focus(usize item);
     void markItem(usize item, s32 part) { m_definition.items.at(item).markedPart = part; }
     s32 time() const { return m_time; }
     s32 finishTimer() const { return m_finishTimer; }
     s32 columnX() const { return m_columnX; }
     s32 columnWidth() const { return m_columnWidth; }
+    /** The column's right edge, its value column and arrows included: the bar stands past it. */
+    s32 columnRight() const { return m_columnRight; }
+    /** Where the bar and its marks stand, to be clicked and dragged; empty without a window. */
+    Rect scrollBarArea() const;
+    /** Scrolls the window to start at column row `first`, as far as the column allows,
+     * leaving the selection where it is; whether the window moved. */
+    bool scrollWindow(s32 first);
     s32 columnHeight() const { return m_columnHeight; }
     s32 itemY(usize index) const;
     s32 itemX(usize index) const;
@@ -226,6 +270,28 @@ public:
 private:
     void glideIcon(s32 ticks);
     s32 nextEnabled(s32 from, s32 step) const;
+    /** The next enabled column item from `from` in direction `step` without wrapping, or
+     * `from` when there is none that way. */
+    s32 nextEnabledWithin(s32 from, s32 step) const;
+    /** How many items the column holds: all but the tail. */
+    s32 columnCount() const;
+    /** Scrolls the window so the selection is in it. */
+    void ensureVisible();
+    /** Lays the items' hit areas out for the window as it stands. */
+    void layoutAreas(const TextPainter& painter);
+    /** The bar's geometry: its x, the track and the thumb along it. */
+    struct ScrollBar {
+        f32 x = 0;
+        f32 top = 0;
+        f32 bottom = 0;
+        f32 trackTop = 0;
+        f32 trackHeight = 0;
+        f32 thumbHeight = 0;
+        f32 thumbTop = 0;
+    };
+    ScrollBar scrollBar() const;
+    /** The first row the window shows with the thumb's middle at `y`. */
+    s32 scrollAt(f32 y) const;
     const Texture* itemSheet(const MenuTextures& textures, bool selected) const;
     s32 valueX(usize index) const;
     s32 valueWidth(usize index) const;
@@ -235,13 +301,16 @@ private:
     bool m_open = false;
     bool m_backdropReleased = false;
     s32 m_selection = 0;
+    s32 m_scroll = 0; ///< the first column row in the window
     s32 m_time = 0;
     s32 m_finishTimer = 0;
     s32 m_lineHeight = 0;
     s32 m_columnX = 0;
     s32 m_columnY = 0;
     s32 m_columnWidth = 0;
+    s32 m_columnRight = 0;
     s32 m_columnHeight = 0;
+    s32 m_titleBottom = 0; ///< under the title's cell, 0 without a title
     f32 m_iconScale = 0.0f;
     Rect m_backdrop;
     s32 m_iconY = 0;
@@ -253,6 +322,8 @@ private:
     std::vector<s32> m_alternateX;
     std::optional<Vec2> m_lastPointer;
     s32 m_hoverPart = 0;
+    bool m_dragging = false; ///< the bar's thumb follows the pointer while held
+    const TextPainter* m_painter = nullptr; ///< borrowed while open, to lay the window out again
 };
 
 } // namespace gdl::game

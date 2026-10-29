@@ -35,6 +35,8 @@ public:
     void waitIdle();
 
 private:
+    /** Lets go of whatever has been made, in reverse order; safe on a part-made context. */
+    void destroy();
     void createInstance(Window& window, bool enableValidation);
     void createDebugMessenger();
     void pickPhysicalDevice();

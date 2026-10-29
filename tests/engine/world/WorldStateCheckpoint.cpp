@@ -934,6 +934,7 @@ bool WorldStateCheckpoint::commitRestore(Prepared&& prepared) {
     }
     std::swap(m_scene.m_lighting, data->lighting);
     m_scene.m_darken = data->darken;
+    m_scene.m_lighting.darken = data->darken; // as the scene's own restore keeps them in step
     m_scene.m_textureFrame = data->textureFrame;
     std::fill(m_scene.m_worldValid.begin(), m_scene.m_worldValid.end(), u8{0});
     std::fill(m_scene.m_presentedValid.begin(), m_scene.m_presentedValid.end(), u8{0});

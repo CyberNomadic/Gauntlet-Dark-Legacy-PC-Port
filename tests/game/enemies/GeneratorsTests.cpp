@@ -2190,7 +2190,6 @@ TEST_CASE("an aggravated swarm's generators breed sooner and keep a larger brood
     CHECK(generators.birthsTried() == 0);
     SwarmAggression frenzied;
     frenzied.heat = 1.0f;
-    frenzied.rage = 1.0f;
     frenzied.run = SwarmAggression::kFullRun; // a run under way: the frenzy
     REQUIRE(frenzied.frenzied());
     REQUIRE(static_cast<s32>(static_cast<f32>(most) * frenzied.broodScale()) == 10);

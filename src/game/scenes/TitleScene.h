@@ -26,7 +26,7 @@
 
 namespace gdl::game {
 
-enum class TitleOutcome : u8 { Running, TimedOut, StartGame, Netplay };
+enum class TitleOutcome : u8 { Running, TimedOut, StartGame, Netplay, Quit };
 
 /**
  * The title screen: the logo backdrop with its animated glow, "Press Start", and the Start /
@@ -55,7 +55,10 @@ public:
     void render(RenderDevice& device, const Mat4& frameProjection, f32 frameWidth, f32 frameHeight);
 
     bool menuOpen() const { return m_titleMenu.isOpen(); }
+    const OptionMenu& titleMenu() const { return m_titleMenu; }
     bool startMenuOpen() const { return menuOpen() && m_startMenu; }
+    /** Whether the menu is asking before quitting to the desktop. */
+    bool quitConfirmOpen() const { return menuOpen() && m_quitConfirm; }
     bool optionsOpen() const { return m_optionsMenu.isOpen(); }
     bool loading() const { return m_loadingTimer > 0; }
     bool burning() const { return m_fire.active(); }
@@ -78,6 +81,7 @@ private:
     const Texture* staticTexture(std::string_view name, u32 frame = 0);
     void drawGlowText(s32 x, s32 y, std::string_view label);
     void openTitleMenu(bool startMenu = false);
+    void openQuitConfirm();
     void openOptionsMenu();
     void closeOptionsMenu();
     void startMusic();
@@ -86,6 +90,7 @@ private:
 
     bool m_open = false;
     bool m_startMenu = false;
+    bool m_quitConfirm = false;    ///< the title menu is the quit dialog
     std::string m_optionsLanguage; ///< the text language when the options opened
     RenderDevice* m_device = nullptr;
     GameContext m_context;

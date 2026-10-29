@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <span>
 #include <format>
 
 #include <catch2/catch_test_macros.hpp>
@@ -124,14 +125,35 @@ TEST_CASE("loading pictures retain complete native HUD tops through crossfades a
     const auto& activeStrip = texture(artwork, "BK_RUNE_STONE_02");
     const auto& glint = texture(artwork, "TRBO_GLINT");
     const auto& meter = texture(artwork, "TRBO_FULL_NEW");
-    std::array<const test::FakeTexture*, 4> preview{};
-    for (usize i = 0; i < preview.size(); ++i) {
-        preview[i] = &texture(maps, std::format("LDMAP_G1_{:02}", i));
+    std::array<const test::FakeTexture*, 4> previewTiles{};
+    for (usize i = 0; i < previewTiles.size(); ++i) {
+        previewTiles[i] = &texture(maps, std::format("LDMAP_G1_{:02}", i));
     }
     const auto matches = [](const test::RecordedDraw& draw, const test::FakeTexture& expected) {
         return draw.texture->width() == expected.width() &&
                draw.texture->height() == expected.height() &&
                dynamic_cast<const test::FakeTexture&>(*draw.texture).pixels == expected.pixels;
+    };
+    // The preview is one picture joined from its four tiles at their places (0,0) (256,0)
+    // (0,256) (256,256) and mended along the joins, so no seam shows between them: well
+    // inside each tile its texels sit where the tile was placed.
+    const auto joinedPreview = [&](const test::RecordedDraw& draw) {
+        if (draw.texture->width() != 512 || draw.texture->height() != 384) {
+            return false;
+        }
+        const auto& pixels = dynamic_cast<const test::FakeTexture&>(*draw.texture).pixels;
+        const auto texel = [&](u32 x, u32 y) {
+            return std::span(pixels).subspan((usize{y} * 512 + x) * 4, 4);
+        };
+        constexpr u32 kInside = 32;
+        const auto inside = [](const test::FakeTexture& tileTexture) {
+            return std::span(tileTexture.pixels)
+                .subspan((usize{kInside} * tileTexture.width() + kInside) * 4, 4);
+        };
+        return std::ranges::equal(texel(kInside, kInside), inside(*previewTiles[0])) &&
+               std::ranges::equal(texel(256 + kInside, kInside), inside(*previewTiles[1])) &&
+               std::ranges::equal(texel(kInside, 256 + kInside), inside(*previewTiles[2])) &&
+               std::ranges::equal(texel(256 + kInside, 256 + kInside), inside(*previewTiles[3]));
     };
     const std::array<Vec2, 4> extents{{{640, 448}, {1024, 768}, {1920, 1080}, {900, 1200}}};
     // Sample the map, a partially crossfaded preview and the complete preview.
@@ -156,13 +178,11 @@ TEST_CASE("loading pictures retain complete native HUD tops through crossfades a
             usize meters = 0;
             usize previews = 0;
             for (const auto& draw : device.draws) {
-                for (const auto* image : preview) {
-                    if (matches(draw, *image)) {
-                        ++previews;
-                    }
+                if (joinedPreview(draw)) {
+                    ++previews;
                 }
                 if (matches(draw, strip) || matches(draw, activeStrip)) {
-                    CHECK(previews == preview.size());
+                    CHECK(previews == 1);
                     const Vec2 corner = test::minCorner(draw);
                     const auto slot = static_cast<usize>(corner.x / StatusBoxPainter::kWidth);
                     REQUIRE(slot < strips.size());
@@ -183,7 +203,7 @@ TEST_CASE("loading pictures retain complete native HUD tops through crossfades a
                 }
                 if (matches(draw, glint)) {
                     ++glints;
-                    CHECK(previews == preview.size());
+                    CHECK(previews == 1);
                     CHECK(test::minCorner(draw) == Vec2{256, StatusBoxPainter::kTurboY});
                     CHECK(test::maxCorner(draw) ==
                           Vec2{256 + static_cast<f32>(glint.width()),

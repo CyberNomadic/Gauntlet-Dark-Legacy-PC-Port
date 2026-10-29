@@ -148,6 +148,7 @@ TEST_CASE("two-column choices draw arrows and gray disabled values without a cur
     definition.valueWidth = 32;
     definition.showCursor = false;
     f.menu.open(definition, f.painter, {});
+    CHECK(f.menu.columnRight() == 200 + 32 + 11); // the value column and its arrow
     test::FakeRenderDevice device;
     test::FakeTexture cursor{32, 32};
     MenuTextures textures;
@@ -217,6 +218,136 @@ TEST_CASE("standalone choice rows draw and hit-test their own centered column",
     event = f.menu.update(click, 1);
     CHECK(event.code == 1);
     CHECK(event.direction == 1);
+}
+
+TEST_CASE("a long column scrolls behind its window, by the keys, the wheel and a tail row",
+          "[game][menu][scroll-menu]") {
+    Fixture f;
+    MenuDefinition definition;
+    for (s32 i = 0; i < 8; ++i) {
+        definition.items.push_back({std::string(1, static_cast<char>('A' + i)), i});
+    }
+    definition.items.push_back({"APPLY", 100});
+    definition.items.push_back({"RESET", 101});
+    definition.tailPositions = {Vec2{100, 300}, Vec2{200, 300}};
+    definition.visibleRows = 3;
+    definition.x = 10;
+    definition.y = 20;
+    f.menu.open(definition, f.painter, MenuScreen{});
+    CHECK(f.menu.windowRows() == 3);
+    CHECK(f.menu.scroll() == 0);
+    CHECK(f.menu.columnHeight() == 3 * f.menu.lineHeight());
+    for (usize i = 0; i < 10; ++i) {
+        CHECK(f.menu.shown(i) == (i < 3 || i >= 8));
+    }
+    CHECK(f.menu.itemY(1) == f.menu.itemY(0) + f.menu.lineHeight());
+    CHECK(f.menu.itemY(8) == 300);
+    CHECK(f.menu.itemX(9) == 200);
+    CHECK(f.menu.itemArea(5).width == 0); // out of the window: nothing to point at
+    // Down past the window scrolls it; up at its top scrolls back.
+    for (s32 i = 0; i < 4; ++i) {
+        f.menu.update(pressed(false, true, false, false), 1);
+    }
+    CHECK(f.menu.selection() == 4);
+    CHECK(f.menu.scroll() == 2);
+    CHECK(f.menu.shown(4));
+    CHECK_FALSE(f.menu.shown(1));
+    CHECK(f.menu.itemY(2) == 20); // the window's first row stands where the column starts
+    CHECK(f.menu.itemY(1) == 20 - f.menu.lineHeight());
+    f.menu.focus(0);
+    CHECK(f.menu.scroll() == 0);
+    // The wheel scrolls the window a row a notch and stops at its ends; the selection stays.
+    MenuInput wheel;
+    wheel.pointerScroll = -2.0f;
+    CHECK(f.menu.update(wheel, 1).action == MenuAction::Moved);
+    CHECK(f.menu.selection() == 0);
+    CHECK(f.menu.scroll() == 2);
+    CHECK_FALSE(f.menu.shown(0)); // out of the window until a key brings it back
+    wheel.pointerScroll = -1.0f;
+    f.menu.update(wheel, 1);
+    CHECK(f.menu.selection() == 0);
+    CHECK(f.menu.scroll() == 3);
+    wheel.pointerScroll = 1.0f;
+    f.menu.update(wheel, 1);
+    CHECK(f.menu.scroll() == 2);
+    f.menu.update(pressed(false, true, false, false), 1); // a key: the window finds the selection
+    CHECK(f.menu.selection() == 1);
+    CHECK(f.menu.scroll() == 1); // by the least it can move
+    f.menu.focus(7);
+    CHECK(f.menu.scroll() == 5);
+    wheel.pointerScroll = -5.0f;
+    CHECK(f.menu.update(wheel, 1).action == MenuAction::None); // the column's end
+    CHECK(f.menu.selection() == 7);
+    // Wrapping from the last tail item comes back to the column's first row.
+    f.menu.update(pressed(false, true, false, false), 1);
+    CHECK(f.menu.selection() == 8);
+    f.menu.update(pressed(false, true, false, false), 1);
+    f.menu.update(pressed(false, true, false, false), 1);
+    CHECK(f.menu.selection() == 0);
+    CHECK(f.menu.scroll() == 0);
+    // A pointer finds only what is in the window.
+    MenuInput point;
+    point.pointer = Vec2{f.menu.itemArea(1).x + 1, f.menu.itemArea(1).y + 1};
+    point.pointerPressed = true;
+    CHECK(f.menu.update(point, 1).code == 1);
+    f.menu.focus(7);
+    point.pointer = Vec2{f.menu.itemArea(7).x + 1, f.menu.itemArea(7).y + 1};
+    CHECK(f.menu.update(point, 1).code == 7);
+    CHECK(f.menu.pointerChoice(point) == 7);
+    // Opened again with its window where it was, the menu keeps it as long as the selection
+    // stays inside; a window the selection is outside of is brought to it.
+    f.menu.open(definition, f.painter, MenuScreen{}, 3, 2);
+    CHECK(f.menu.selection() == 3);
+    CHECK(f.menu.scroll() == 2);
+    f.menu.open(definition, f.painter, MenuScreen{}, 0, 5);
+    CHECK(f.menu.scroll() == 0);
+    f.menu.open(definition, f.painter, MenuScreen{}, 7, 9);
+    CHECK(f.menu.scroll() == 5);
+    // The bar and its marks stand at the column's right hand, past its widest row: the
+    // column's own, a letter wide; the tail's longer labels stand apart from it.
+    CHECK(f.menu.columnRight() == f.menu.columnX() + 8);
+    f.menu.open(definition, f.painter, MenuScreen{}, 3, 2);
+    test::FakeRenderDevice device;
+    MenuTextures textures;
+    textures.font = &f.sheet;
+    Canvas canvas;
+    canvas.begin(device, Mat4{1});
+    f.menu.draw(canvas, f.painter, textures);
+    canvas.end();
+    s32 marks = 0;
+    s32 bars = 0;
+    for (const auto& draw : device.draws) {
+        if (draw.texture != &device.whiteTexture() ||
+            test::minCorner(draw).x <= static_cast<f32>(f.menu.columnRight())) {
+            continue;
+        }
+        marks += draw.vertices.size() == 3 ? 1 : 0;
+        bars += draw.vertices.size() > 3 ? static_cast<s32>(draw.vertices.size()) : 0;
+    }
+    CHECK(marks == 2); // rows wait above and below
+    CHECK(bars >= 8);  // the track and its thumb, four corners each
+}
+
+TEST_CASE("the confirmation dialog is the retail yes/no parchment", "[game][menu]") {
+    const MenuDefinition dialog = MenuDefinition::confirmation("QUIT?", "NO", "YES");
+    CHECK(dialog.title == "QUIT?");
+    CHECK(dialog.titleScale == 1.2f);
+    CHECK(dialog.x == -256);
+    CHECK(dialog.backdrop == "SCROLL_A");
+    CHECK(dialog.backdropX == -1);
+    CHECK(dialog.backdropY == 64);
+    CHECK(dialog.backdropWidth == 320);
+    CHECK(dialog.backdropHeight == 220);
+    CHECK(dialog.parchmentFont);
+    CHECK(dialog.fades);
+    CHECK_FALSE(dialog.prompts);
+    CHECK(dialog.playerLabel.empty());
+    CHECK(dialog.burn.empty());
+    REQUIRE(dialog.items.size() == 2);
+    CHECK(dialog.items[0].text == "NO");
+    CHECK(dialog.items[0].code == 0);
+    CHECK(dialog.items[1].text == "YES");
+    CHECK(dialog.items[1].code == 1);
 }
 
 TEST_CASE("navigation wraps and reports choices and backing out", "[game][menu]") {
@@ -783,6 +914,151 @@ TEST_CASE("a two-choice row highlights only its active part and renders one chec
     };
     verify(2);
     verify(1);
+}
+
+
+TEST_CASE("rows and a title wider than the width a menu is given shrink to fit inside it",
+          "[game][menu][fit]") {
+    Fixture f;
+    // Every letter is eight pixels wide: a forty-letter row is 320 wide at scale one, wider
+    // than the dialog's parchment less its margins.
+    auto dialog = MenuDefinition::confirmation("A TITLE THAT IS FAR TOO LONG FOR THE SCROLL",
+                                               "RETURN TO THE MAIN MENU OF THE WHOLE GAME",
+                                               "QUIT TO THE DESKTOP");
+    CHECK(dialog.fitWidth == 320);
+    f.menu.open(dialog, f.painter, MenuScreen{});
+    const auto& fitted = f.menu.definition();
+    CHECK(fitted.scale < 1.0f);
+    CHECK(fitted.cursorScale == fitted.scale);
+    CHECK(fitted.titleScale < 1.2f);
+    const s32 room = 320 - 2 * OptionMenu::kFitMargin;
+    CHECK(f.painter.measure(fitted.items[0].text, fitted.scale) <= room);
+    CHECK(f.painter.measure(fitted.title, fitted.titleScale) <= room);
+    for (usize i = 0; i < fitted.items.size(); ++i) {
+        const Rect area = f.menu.itemArea(i);
+        CHECK(area.x >= f.menu.backdropArea().x + OptionMenu::kFitMargin);
+        CHECK(area.x + area.width <= f.menu.backdropArea().x + 320 - OptionMenu::kFitMargin);
+    }
+    // Rows that fit are left at their size.
+    f.menu.open(MenuDefinition::confirmation("QUIT?", "NO", "YES"), f.painter, MenuScreen{});
+    CHECK(f.menu.definition().scale == 1.0f);
+    CHECK(f.menu.definition().titleScale == 1.2f);
+    // Without a width to fit, nothing changes however long the row.
+    MenuDefinition free;
+    free.items = {{"A ROW AS LONG AS THE WHOLE SCREEN AND MORE BESIDES IT", 0}};
+    f.menu.open(free, f.painter, MenuScreen{});
+    CHECK(f.menu.definition().scale == 1.0f);
+}
+
+
+TEST_CASE("the bar at the column's right hand is clicked and dragged through the column",
+          "[game][menu][scroll-menu][mouse]") {
+    Fixture f;
+    MenuDefinition definition;
+    for (s32 i = 0; i < 8; ++i) {
+        definition.items.push_back({std::string(1, static_cast<char>('A' + i)), i});
+    }
+    definition.visibleRows = 3;
+    definition.x = 10;
+    definition.y = 20;
+    f.menu.open(definition, f.painter, MenuScreen{});
+    const Rect bar = f.menu.scrollBarArea();
+    REQUIRE(bar.width > 0);
+    CHECK(bar.x > static_cast<f32>(f.menu.columnRight()));
+    // Pressed on the track, the thumb follows the pointer while it is held.
+    MenuInput press;
+    press.pointer = Vec2{bar.x + bar.width / 2, bar.y + bar.height / 2};
+    press.pointerPressed = true;
+    press.pointerHeld = true;
+    f.menu.update(press, 1);
+    MenuInput drag;
+    drag.pointer = Vec2{bar.x + bar.width / 2, bar.y + bar.height}; // the bottom
+    drag.pointerHeld = true;
+    f.menu.update(drag, 1);
+    CHECK(f.menu.scroll() == 5);
+    CHECK(f.menu.selection() == 0); // the selection stays where it was
+    // The icon stays with the rows in view, at the edge nearest its selection.
+    f.menu.update(drag, OptionMenu::kIconGlideTicks);
+    f.menu.update(drag, OptionMenu::kIconGlideTicks);
+    CHECK(f.menu.iconY() == f.menu.itemY(5) + f.menu.lineHeight() / 2);
+    CHECK(f.menu.iconY() >= f.menu.itemY(5));
+    CHECK(f.menu.iconY() <= f.menu.itemY(7) + f.menu.lineHeight());
+    drag.pointer = Vec2{bar.x + bar.width / 2, bar.y}; // the top
+    f.menu.update(drag, 1);
+    CHECK(f.menu.scroll() == 0);
+    f.menu.update(drag, OptionMenu::kIconGlideTicks);
+    f.menu.update(drag, OptionMenu::kIconGlideTicks);
+    CHECK(f.menu.iconY() == f.menu.itemY(0) + f.menu.lineHeight() / 2); // back on its row
+    // Let go, the pointer no longer moves the window.
+    MenuInput release;
+    release.pointer = Vec2{bar.x + bar.width / 2, bar.y + bar.height};
+    f.menu.update(release, 1);
+    f.menu.update(release, 1);
+    CHECK(f.menu.scroll() == 0);
+    // The marks above and below step a row.
+    f.menu.scrollWindow(2);
+    MenuInput mark;
+    mark.pointer = Vec2{bar.x + bar.width / 2, bar.y + 1};
+    mark.pointerPressed = true;
+    f.menu.update(mark, 1);
+    CHECK(f.menu.scroll() == 1);
+    mark.pointer = Vec2{bar.x + bar.width / 2, bar.y + bar.height - 1};
+    f.menu.update(mark, 1);
+    f.menu.update({}, 1);
+    f.menu.update(mark, 1);
+    CHECK(f.menu.scroll() == 3);
+    // A pointer that comes to rest over a row chooses it; resting still, it chooses nothing
+    // more as the rows scroll under it, until it moves again.
+    MenuInput rest;
+    rest.pointer = Vec2{f.menu.itemArea(3).x + 1, f.menu.itemArea(3).y + 1};
+    f.menu.update(rest, 1);
+    CHECK(f.menu.selection() == 3);
+    f.menu.scrollWindow(5); // row 5 now stands where row 3 stood, under the pointer
+    f.menu.update(rest, 1);
+    CHECK(f.menu.selection() == 3);
+    rest.pointer = Vec2{rest.pointer->x + OptionMenu::kHoverMotion + 1, rest.pointer->y};
+    f.menu.update(rest, 1);
+    CHECK(f.menu.selection() == 5);
+}
+
+
+TEST_CASE("a dialog's rows stand evenly on its parchment, under its title, with a gap between",
+          "[game][menu][fit]") {
+    Fixture f;
+    // Without a title the rows sit in the middle of the parchment (64 to 284), ten apart.
+    auto dialog = MenuDefinition::confirmation({}, "MAIN", "QUIT");
+    CHECK(dialog.rowGap == OptionMenu::kDialogRowGap);
+    CHECK(dialog.centreOnBackdrop);
+    f.menu.open(dialog, f.painter, MenuScreen{});
+    CHECK(f.menu.titleBottom() == 0);
+    CHECK(f.menu.columnHeight() == 2 * f.menu.lineHeight() + OptionMenu::kDialogRowGap);
+    CHECK(f.menu.itemY(1) == f.menu.itemY(0) + f.menu.lineHeight() + OptionMenu::kDialogRowGap);
+    const s32 middle = 64 + 220 / 2;
+    CHECK(f.menu.itemY(0) == middle - f.menu.columnHeight() / 2);
+    // With a title they sit in the middle of what lies under it.
+    f.menu.open(MenuDefinition::confirmation("SURE?", "NO", "YES"), f.painter, MenuScreen{});
+    const s32 titleBottom = 64 + OptionMenu::kTitleMargin + f.painter.lineHeight(1.2f);
+    CHECK(f.menu.titleBottom() == titleBottom);
+    CHECK(f.menu.itemY(0) == (titleBottom + 284) / 2 - f.menu.columnHeight() / 2);
+    CHECK(f.menu.itemY(0) >= titleBottom);
+    // Rows that would stand over a page's title move down under it: a column as one, rows
+    // placed by hand together.
+    auto page = MenuDefinition::parchment();
+    page.title = "T";
+    page.items = {{"A", 0}, {"B", 1}};
+    page.y = 70;
+    f.menu.open(page, f.painter, MenuScreen{});
+    const s32 pageTitleBottom = 8 + OptionMenu::kTitleMargin + f.painter.lineHeight(1.2f);
+    CHECK(f.menu.itemY(0) == pageTitleBottom);
+    page.itemPositions = {Vec2{64, 70}, Vec2{64, 90}};
+    f.menu.open(page, f.painter, MenuScreen{});
+    CHECK(f.menu.itemY(0) == pageTitleBottom);
+    CHECK(f.menu.itemY(1) == pageTitleBottom + 20);
+    // A column already under the title is left where it stands.
+    page.itemPositions.clear();
+    page.y = 200;
+    f.menu.open(page, f.painter, MenuScreen{});
+    CHECK(f.menu.itemY(0) == 200);
 }
 
 } // namespace

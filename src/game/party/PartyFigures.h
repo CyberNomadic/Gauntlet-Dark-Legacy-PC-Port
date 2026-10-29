@@ -54,7 +54,8 @@ public:
     /** The skin a figure wears this frame, none for its own: the portal's while it sinks,
      * else the damage flash, else the chrome its invulnerability shows. */
     const Texture* skinOf(const PlayerRuntime& runtime, const PowerupEffects& worn,
-                          const PortalDeparture& departure) const;
+                          const PortalDeparture& departure,
+                          const ImportedLevel* imported = nullptr) const;
 
     /** The shield an armour bears on the arm, none without one: reflecting, fire, then
      * lightning, as PlayerProcessPowerups tries them. */

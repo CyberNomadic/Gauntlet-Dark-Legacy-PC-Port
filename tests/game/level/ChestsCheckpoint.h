@@ -57,6 +57,7 @@ public:
         std::vector<ItemInstance> placements;
         std::vector<Chest> chests;
         u32 seed = 0;
+        f32 seedRemainder = 0.0f;
         bool collision = false;
         bool layout = false;
         bool valid() const;

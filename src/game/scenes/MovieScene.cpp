@@ -52,7 +52,9 @@ bool MovieScene::update(f64 deltaSeconds) {
     if (!isOpen()) {
         return false;
     }
-    const bool playing = m_playback.update(deltaSeconds);
+    // The picture keeps to the sound as the mixer plays it.
+    const bool playing = m_playback.update(
+        deltaSeconds, m_audio ? std::optional{m_audio->playedSeconds()} : std::nullopt);
     if (m_playback.frameChanged()) {
         m_textureDirty = true;
     }

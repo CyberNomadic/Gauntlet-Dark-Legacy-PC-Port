@@ -12,8 +12,8 @@
 #include "game/combat/MeleeGeometry.h"
 #include "game/effects/TurboEmission.h"
 #include "game/enemies/LevelOpponents.h"
-#include "game/mechanics/MechanicsFacade.h"
 #include "game/level/LevelFixtures.h"
+#include "game/mechanics/MechanicsFacade.h"
 #include "game/party/MoveStrikes.h"
 #include "game/party/PlayerArsenal.h"
 #include "game/party/TargetAssist.h"
@@ -154,20 +154,18 @@ public:
      * (`MeleeStreak`) what the mechanics say: on an enemy only one taller than the short
      * (hht > 2); a kill is one that stood (`stood`) and stands no more, and the original's
      * telling blow one that killed or that the body was not standing to take. */
-    static void countEnemyBlow(const Targets& targets, std::span<PlayerRuntime> players,
-                               s32 player, BlowSource source, const Enemies& enemies, s32 id,
-                               bool stood);
+    static void countEnemyBlow(const Targets& targets, std::span<PlayerRuntime> players, s32 player,
+                               BlowSource source, const Enemies& enemies, s32 id, bool stood);
     static void countCritterBlow(const Targets& targets, std::span<PlayerRuntime> players,
-                                 s32 player, BlowSource source, const Critters& critters,
-                                 s32 id, bool stood);
+                                 s32 player, BlowSource source, const Critters& critters, s32 id,
+                                 bool stood);
     /** A blow a sleeping boss does not take, or the last, is the original's telling one. */
-    static void countBossBlow(const Targets& targets, std::span<PlayerRuntime> players,
-                              s32 player, BlowSource source, const BossView& before,
-                              const Bosses& bosses);
+    static void countBossBlow(const Targets& targets, std::span<PlayerRuntime> players, s32 player,
+                              BlowSource source, const BossView& before, const Bosses& bosses);
     /** A blow on generator `id`, destroyed when it `stood` and stands no more. */
     static void countGeneratorBlow(const Targets& targets, std::span<PlayerRuntime> players,
-                                   s32 player, BlowSource source, const Generators& huts,
-                                   s32 id, bool stood);
+                                   s32 player, BlowSource source, const Generators& huts, s32 id,
+                                   bool stood);
     void melee(usize index, std::span<PlayerRuntime> players, const Targets& targets);
     /** The same native contact, with generator presentation supplied by a
      * transaction-local publisher. A refusal requires complete caller undo. */
@@ -214,8 +212,7 @@ private:
     /** A blow of `source` on whatever `target` is: the mechanics say whether it builds the
      * owner's run and whether a generator takes it. */
     void strikeTarget(const MissileTarget& target, f32 damage, u32 flags, const PlayerActor& owner,
-                      std::span<PlayerRuntime> players, const Targets& targets,
-                      BlowSource source);
+                      std::span<PlayerRuntime> players, const Targets& targets, BlowSource source);
     struct ItemArea {
         ItemAttack attack;
         usize actor = 0;
@@ -286,7 +283,7 @@ private:
     bool strikeSwitch(s32 id, u32 flags);
     /** What magic leaves alone: every barrel but one that holds something, the walls, the
      * rocks and the switches. */
-    static bool immuneToMagic(s32 id, const Targets& targets);
+    bool immuneToMagic(s32 id, const Targets& targets) const;
     void shootPotion(const MissileImpact& impact, std::span<PlayerRuntime> players,
                      const Targets& targets);
     static ItemArchive* moveEffectsOf(usize index, std::span<PlayerRuntime> players);

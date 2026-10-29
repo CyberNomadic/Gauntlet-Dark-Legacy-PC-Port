@@ -3877,7 +3877,7 @@ TEST_CASE("an aggravated swarm is born tougher and walks quicker", "[enemies][st
     REQUIRE(calmBody.has_value());
     SwarmAggression hot;
     hot.heat = 1.0f;
-    hot.rage = 0.5f;
+    hot.surge = 0.5f;
     enemies.setAggression(hot);
     CHECK(enemies.paceOf(kGruntKind) == Approx(calmPace * hot.speedScale()));
     spawn.position = {40, 0, 0};
@@ -3897,8 +3897,22 @@ TEST_CASE("an aggravated swarm is born tougher and walks quicker", "[enemies][st
     CHECK_FALSE(enemies.spawn(spawn, {}).has_value());
     enemies.widenPool();
     CHECK(enemies.most() == Enemies::kMost);
-    CHECK(enemies.spawn(spawn, {}).has_value());
+    const auto extra = enemies.spawn(spawn, {});
+    REQUIRE(extra.has_value());
     CHECK(enemies.count() == 3);
+    // The frenzy over, the pool narrows to the body past the cap and no further.
+    CHECK(enemies.levelCap() == 2);
+    enemies.narrowPool();
+    CHECK(enemies.most() == *extra + 1);
+    CHECK(enemies.alive(*extra));
+    // A pool widened with nothing standing past the cap narrows at once.
+    Enemies idle;
+    idle.open(device, unpackedRoot(), nullptr, 2, {}, 1);
+    idle.widenPool();
+    CHECK(idle.most() == Enemies::kMost);
+    idle.narrowPool();
+    CHECK(idle.most() == 2);
+    CHECK(idle.levelCap() == 2);
 }
 
 TEST_CASE("elemental demon missiles replace rather than combine their native fire element",

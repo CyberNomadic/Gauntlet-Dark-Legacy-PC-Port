@@ -65,6 +65,17 @@ target_link_libraries(game_diagnostics PUBLIC gdl::game PRIVATE lz4::lz4)
 gdl_apply_compiler_options(game_diagnostics)
 
 add_executable(tests
+    game/level/LegendsUnlocksTests.cpp
+    game/level/LegendsPortalAppearanceTests.cpp
+    game/bosses/LegendsBossesTests.cpp
+    game/bosses/LegendsBossIntegrationTests.cpp
+    game/critters/LegendsCrittersTests.cpp
+    game/enemies/LegendsActorsTests.cpp
+    game/enemies/LevelOpponentsLegendsTests.cpp
+    game/scenes/LegendsLevelProgressTests.cpp
+    game/scenes/LegendsSceneArenaTests.cpp
+    game/scenes/LegendsArenaCombatTests.cpp
+    game/scenes/LegendsBossRewardsTests.cpp
     engine/io/NativeStateDigestTests.cpp
     game/scenes/PlayerNativeStateTests.cpp
     game/enemies/EnemyMissilesNativeDigestTests.cpp
@@ -128,6 +139,7 @@ add_executable(tests
     game/level/LevelTransportersCheckpointTests.cpp
     game/enemies/CombatResourcesTests.cpp
     game/level/ChestsCheckpointTests.cpp
+    game/level/ChestsTests.cpp
     game/level/LockedGatesCheckpointTests.cpp
     game/level/BreakablesCheckpointTests.cpp
     game/level/SafeRocksCheckpointTests.cpp
@@ -182,8 +194,8 @@ add_executable(tests
     game/rollback/SessionInputsTests.cpp
     game/app/BuildLabelTests.cpp
     game/app/LevelDebugOverlayTests.cpp
-    game/app/DevConsoleTests.cpp
-    game/scenes/ConsoleCommandsTests.cpp
+    game/console/DevConsoleTests.cpp
+    game/console/ConsoleCommandsTests.cpp
     game/app/GameCursorTests.cpp
     game/scenes/PlaySceneRumbleTests.cpp
     game/level/StaticSceneryTests.cpp
@@ -201,6 +213,7 @@ add_executable(tests
     game/combat/DamageTypesTests.cpp
     game/party/PlayerPowerupsTests.cpp
     game/menu/SettingsMenuTests.cpp
+    game/menu/MenuFontTests.cpp
     game/menu/SettingsRowsTests.cpp
     game/menu/VideoSettingsTests.cpp
     game/hud/CompassHudTests.cpp
@@ -243,6 +256,8 @@ add_executable(tests
     engine/render/ImageTests.cpp
     engine/render/ImmediateBatchTests.cpp
     engine/render/ThreadedRenderDeviceTests.cpp
+    engine/render/OpenGlFunctionsTests.cpp
+    engine/render/OpenGlShaderSourceTests.cpp
     engine/render/DebugTexturesTests.cpp
     engine/codec/LzssTests.cpp
     engine/codec/AviReaderTests.cpp
@@ -269,6 +284,11 @@ add_executable(tests
     engine/assets/SoundSetTests.cpp
     engine/audio/SoundPlayerTests.cpp
     engine/audio/AdsStreamTests.cpp
+    engine/audio/DreamcastStreamTests.cpp
+    engine/audio/N64LegendsStreamTests.cpp
+    engine/audio/N64LegendsEffectsTests.cpp
+    game/audio/LegendsSoundsTests.cpp
+    game/audio/LegendsOpponentSoundsTests.cpp
     engine/audio/MusicDeclickerTests.cpp
     engine/audio/StreamPlaylistTests.cpp
     engine/assets/ModelSetTests.cpp
@@ -339,6 +359,61 @@ add_executable(tests
     engine/ui/CanvasTests.cpp
     engine/ui/TextPainterTests.cpp
     formats/ModelArchiveTests.cpp
+    formats/LegendsMapTests.cpp
+    formats/LegendsDreamcastMapTests.cpp
+    formats/LegendsDreamcastTextureTests.cpp
+    formats/LegendsN64TextureTests.cpp
+    game/scenes/LegendsPreviewTests.cpp
+    game/scenes/LegendsPlayableTests.cpp
+    game/scenes/LegendsTraversalTests.cpp
+    game/scenes/LegendsMusicTests.cpp
+    game/scenes/LegendsMapCatalogTests.cpp
+    game/scenes/LegendsSceneAdapterTests.cpp
+    game/scenes/LegendsSceneTrapsTests.cpp
+    game/scenes/LegendsLevelEffectsTests.cpp
+    game/scenes/LegendsMotionSoundsTests.cpp
+    game/scenes/LegendsInitialPoseTests.cpp
+    game/level/ItemFigureTextureLendersTests.cpp
+    engine/assets/DecodedAssetsTests.cpp
+    formats/LegendsDreamcastSceneTests.cpp
+    formats/LegendsN64SceneTests.cpp
+    formats/LegendsN64CameraTests.cpp
+    game/camera/LegendsCameraTests.cpp
+    formats/LegendsN64TowerTests.cpp
+    formats/LegendsN64ProgressTests.cpp
+    formats/LegendsN64GatesTests.cpp
+    formats/LegendsN64TrapsTests.cpp
+    game/level/LegendsTowerProgressTests.cpp
+    game/level/LegendsTowerPortalsTests.cpp
+    game/level/LegendsGatesTests.cpp
+    formats/LegendsN64PortalTests.cpp
+    game/level/LegendsPortalsTests.cpp
+    formats/LegendsN64MorphTests.cpp
+    game/level/LegendsTowerMotionTests.cpp
+    game/level/ImportedLevelWorldTests.cpp
+    game/scenes/ImportedPlaySceneTests.cpp
+    game/scenes/LegendsGameplayTests.cpp
+    game/scenes/LegendsTowerTests.cpp
+    game/scenes/LegendsRidersTests.cpp
+    game/scenes/LegendsProgressionTests.cpp
+    game/scenes/LegendsWorldPresentationTests.cpp
+    formats/LegendsSceneMotionTests.cpp
+    game/scenes/LegendsN64MusicTests.cpp
+    game/characters/LegendsProgressTests.cpp
+    game/characters/LegendsVisitTests.cpp
+    game/level/LegendsItemsTests.cpp
+    game/level/LegendsN64ItemsTests.cpp
+    game/level/LegendsContainersTests.cpp
+    game/level/LegendsBlastTests.cpp
+    game/level/LegendsTrapsTests.cpp
+    game/enemies/LegendsGeneratorsTests.cpp
+    game/party/ImportedTargetsTests.cpp
+    formats/LegendsN64TextTests.cpp
+    formats/LegendsN64SwitchesTests.cpp
+    game/level/LegendsSwitchesTests.cpp
+    game/level/LegendsLootSelectorsTests.cpp
+    game/level/LegendsWorldMotionTests.cpp
+    game/level/LegendsDreamcastItemsTests.cpp
     formats/GcTextureTests.cpp
     formats/FontFileTests.cpp
     formats/TextRomTests.cpp
@@ -356,6 +431,7 @@ add_executable(tests
     game/audio/MusicDuckTests.cpp
     game/scenes/MovieSceneTests.cpp
     game/menu/MenuInputTests.cpp
+    game/menu/MainMenuFactoryTests.cpp
     game/menu/OptionMenuTests.cpp
     game/scenes/TitleSceneTests.cpp
     game/scenes/IdleScreenTests.cpp
@@ -385,6 +461,7 @@ add_executable(tests
     game/hud/PowerupSelectorTests.cpp
     game/scenes/TransitionScreenTests.cpp
     game/scenes/LevelLoadingScreenTests.cpp
+    game/scenes/MapPictureTests.cpp
     game/party/PortalDepartureTests.cpp
     game/tower/LevelExitSpeechTests.cpp
     game/effects/DynamicLightsTests.cpp
@@ -461,6 +538,7 @@ add_executable(tests
     game/camera/StartCameraTests.cpp
     game/hud/StatusBoxTests.cpp
     game/hud/StreakMeterTests.cpp
+    game/hud/CompanionArrowsTests.cpp
     game/mechanics/MechanicsFacadeTests.cpp
     game/hud/PickupHudTests.cpp
     game/hud/BossMeterTests.cpp
@@ -855,6 +933,8 @@ target_sources(tests PRIVATE engine/io/Sha256Tests.cpp game/netplay/AssetDigestT
     game/netplay/OnlineNativeBootstrapTests.cpp game/netplay/NativeOnlinePlayTests.cpp
     game/app/NativeOnlineIdentityTests.cpp game/app/NumericWitnessTests.cpp game/audio/SpeechTimingTests.cpp)
 target_link_libraries(tests PRIVATE Vulkan::Headers volk::volk GPUOpen::VulkanMemoryAllocator)
+target_link_libraries(tests PRIVATE gdl::legends_audio_native)
+gdl_configure_legends_audio_source(engine/audio/N64LegendsEffectsTests.cpp)
 target_include_directories(tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(tests PRIVATE
     VK_NO_PROTOTYPES

@@ -83,16 +83,17 @@ Generators::Checkpoint sample() {
     state.scales = {1.75f, 0.5f, 2.25f};
     state.players = 3;
     state.specialBirth = 0xABCDEF12;
-    state.view.emplace();
-    state.view->position = {13, 17, -19};
-    state.view->right = {0.8f, 0, -0.6f};
-    state.view->up = {0, 1, 0};
-    state.view->forward = {0.6f, 0, 0.8f};
-    state.view->sinX = 0.6f;
-    state.view->cosX = 0.8f;
-    state.view->sinY = 0.8f;
-    state.view->cosY = 0.6f;
-    state.attention = Vec3{-7, 8, 9};
+    ViewVolume eye;
+    eye.position = {13, 17, -19};
+    eye.right = {0.8f, 0, -0.6f};
+    eye.up = {0, 1, 0};
+    eye.forward = {0.6f, 0, 0.8f};
+    eye.sinX = 0.6f;
+    eye.cosX = 0.8f;
+    eye.sinY = 0.8f;
+    eye.cosY = 0.6f;
+    state.view = ViewSet::of(eye, Vec3{-7, 8, 9});
+    state.attentionGate = true;
     REQUIRE(state.valid());
     return state;
 }
@@ -106,9 +107,7 @@ TEST_CASE("generator checkpoint wire preserves every native field and optional c
     if (!view) {
         state.view.reset();
     }
-    if (!attention) {
-        state.attention.reset();
-    }
+    state.attentionGate = attention;
     if (!query) {
         state.roster.front().box.enemyItem.reset();
         state.generators.front().box.enemyItem.reset();
@@ -117,8 +116,8 @@ TEST_CASE("generator checkpoint wire preserves every native field and optional c
     REQUIRE(bytes);
     CHECK(bytes->size() ==
           GeneratorCheckpoint::kHeaderBytes + (view ? GeneratorCheckpoint::kViewBytes : 0) +
-              (attention ? GeneratorCheckpoint::kAttentionBytes : 0) +
               GeneratorCheckpoint::kBodyBytes + 2 * GeneratorCheckpoint::kSlotBytes);
+    CHECK(readU32LE(*bytes, 16) == ((view ? 1U : 0U) | (attention ? 2U : 0U)));
     CHECK(readU32LE(*bytes, 0) == 1);
     CHECK(readU32LE(*bytes, 36) == state.specialBirth);
     CHECK((*bytes)[36] == 0x12);
@@ -164,7 +163,7 @@ TEST_CASE("generator checkpoint validates version scalar enums flags and absent 
           "[rollback][netplay][generator-checkpoint]") {
     auto state = sample();
     state.view.reset();
-    state.attention.reset();
+    state.attentionGate = false;
     state.roster.front().box.enemyItem.reset();
     state.generators.front().box.enemyItem.reset();
     const auto bytes = GeneratorCheckpoint::encode(state);
@@ -239,9 +238,9 @@ TEST_CASE("generator wire rejects malformed native values rather than normalizin
     } else if (field == 3) {
         invalid.generators.front().box.halfAlong += 1;
     } else if (field == 4) {
-        invalid.view->sinX = 2;
+        invalid.view->eyes[0].sinX = 2;
     } else {
-        invalid.attention->y = std::numeric_limits<f32>::infinity();
+        invalid.view->attentions[0].y = std::numeric_limits<f32>::infinity();
     }
     CHECK_FALSE(invalid.valid());
     CHECK_FALSE(GeneratorCheckpoint::encode(invalid));

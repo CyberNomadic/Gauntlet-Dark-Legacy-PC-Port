@@ -420,4 +420,48 @@ TEST_CASE("unreadable and future unlock profiles are preserved instead of overwr
     }
 }
 
+
+TEST_CASE("the developer console locks a class again, in the profile and the characters",
+          "[save][global-unlocks]") {
+    const auto dir = test::scratchDirectory("class-unlock-locked-again");
+    CharacterSave veteran;
+    veteran.name = "VET";
+    veteran.classUnlock = 0x3; // the old per-character reward bits
+    writeTextFile(dir / "slot1.json", veteran.toJson());
+    SaveSlots slots;
+    REQUIRE(slots.open(dir, 2));
+    REQUIRE(slots.unlockClasses(0x100));
+    CHECK(slots.classUnlocks() == 0x103);
+    REQUIRE(slots.lockClasses(0x1));
+    CHECK(slots.classUnlocks() == 0x102);
+    // The profile and the character's own record no longer carry the class.
+    CHECK(CharacterSave::fromJson(readTextFile(dir / "slot1.json")).classUnlock == 0x2);
+    SaveSlots restarted;
+    REQUIRE(restarted.open(dir, 2));
+    CHECK(restarted.classUnlocks() == 0x102);
+    // Another instance open on the directory sees the lock when it opens again.
+    SaveSlots select;
+    REQUIRE(select.open(dir, 2));
+    REQUIRE(select.unlockClasses(0x1));
+    REQUIRE(slots.lockClasses(0x1));
+    REQUIRE(select.open(dir, 2));
+    CHECK(select.classUnlocks() == 0x102);
+    SaveSlots closed;
+    CHECK_FALSE(closed.lockClasses(0x1));
+}
+
+TEST_CASE("save slots live under a folder named beyond the system code page",
+          "[game][players][save][unicode]") {
+    const auto dir = test::scratchDirectory("save-unicode") /
+                     std::filesystem::path(u8"s\u00E4v\u00E9-\u65E5\u672C");
+    SaveSlots slots;
+    REQUIRE(slots.open(dir, 2));
+    REQUIRE(slots.write(0, sampleSave()));
+    SaveSlots reopened;
+    REQUIRE(reopened.open(dir, 2));
+    CharacterSave loaded;
+    REQUIRE(reopened.load(0, loaded));
+    CHECK(loaded.name == sampleSave().name);
+}
+
 } // namespace

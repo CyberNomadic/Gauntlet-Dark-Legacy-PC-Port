@@ -4,6 +4,7 @@
 #include <format>
 
 #include "engine/core/Log.h"
+#include "engine/platform/Paths.h"
 
 #include "game/scenes/GameContext.h"
 
@@ -55,7 +56,7 @@ void OnlineCompletion::open(RenderDevice& device, const GameContext& context,
     }
     m_path = *file;
     if (!m_movie.open(device, context.movieMixer, m_path)) {
-        log::error("Online completion movie could not open: {}", m_path.string());
+        log::error("Online completion movie could not open: {}", paths::utf8(m_path));
         m_phase = Phase::Failed;
         return;
     }

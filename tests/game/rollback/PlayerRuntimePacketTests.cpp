@@ -76,6 +76,8 @@ PlayerRuntimeCheckpoint::State sample() {
         progress.levels.bossDeaths = {0xC789, 0xDEF0};
         progress.lifetime = {number + 12, number + 34, number + 56,
                              123456.125 + static_cast<f64>(index)};
+        progress.legends[0] = {u64{1} << index, 2, 4, 8, {"mount1", "town4"}};
+        progress.legends[1] = {16, 32, 64, u64{1} << (63 - index), {"levela1", "levels6"}};
     }
     value.entrySave = value.save;
     value.entrySave.name = "ENTRY";
@@ -174,6 +176,12 @@ TEST_CASE("participant packet preserves every class and native runtime field can
     CHECK(decoded->entrySave.classes[2].inventory.powerups[5].on);
     CHECK(decoded->save.progress().inventory.potions == std::vector<s32>{4, 0, 1, 3, 0});
     CHECK(decoded->save.moviesSeen.back() == std::string{"A\0B", 3});
+    auto changed = state;
+    changed.save.classes[2].legends[1].legendItems ^= 1;
+    CHECK_FALSE(changed == state);
+    changed = state;
+    changed.entrySave.classes[2].legends[0].completedMaps.pop_back();
+    CHECK_FALSE(changed == state);
 }
 
 TEST_CASE("participant packet rejects truncated trailing version and noncanonical scalar data",
@@ -207,6 +215,9 @@ TEST_CASE("participant packet rejects truncated trailing version and noncanonica
     trailing.push_back(0);
     resizeHeader(trailing);
     CHECK_FALSE(PlayerRuntimePacket::decode(trailing));
+    auto oldVersion = *encoded;
+    word(oldVersion, 4, 2);
+    CHECK_FALSE(PlayerRuntimePacket::decode(oldVersion));
 
     const usize characterOffset = 24 + state.save.name.size();
     auto bad = *encoded;

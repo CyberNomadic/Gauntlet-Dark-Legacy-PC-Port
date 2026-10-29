@@ -8,6 +8,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Types.h"
 #include "engine/io/ByteReader.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
@@ -67,7 +68,7 @@ bool MoviePlayback::open(const std::filesystem::path& path) {
         }
         m_decoder = std::make_unique<VqVideoDecoder>(m_info.width, m_info.height);
     } catch (const std::exception& e) {
-        log::warn("Cannot play {}: {}", path.string(), e.what());
+        log::warn("Cannot play {}: {}", paths::utf8(path), e.what());
         close();
         return false;
     }
@@ -77,8 +78,8 @@ bool MoviePlayback::open(const std::filesystem::path& path) {
     if (m_info.audioReady) {
         audioNote = m_audioCoding == AudioCoding::Ads ? ", ADPCM audio" : ", PCM audio";
     }
-    log::info("Movie {}: {}x{} @ {:.2f} fps, {} frames{}", path.filename().string(), m_info.width,
-              m_info.height, m_info.framesPerSecond, m_info.frameCount, audioNote);
+    log::info("Movie {}: {}x{} @ {:.2f} fps, {} frames{}", paths::utf8(path.filename()),
+              m_info.width, m_info.height, m_info.framesPerSecond, m_info.frameCount, audioNote);
     return true;
 }
 
@@ -94,7 +95,9 @@ void MoviePlayback::close() {
     m_audio.clear();
     m_audioQueuedSeconds = 0.0;
     m_playTime = 0.0;
+    m_audioClock = 0.0;
     m_decodedFrames = 0;
+    m_primed = false;
     m_frameChanged = false;
     m_endOfStream = false;
     m_reportedDecodeError = false;
@@ -105,12 +108,21 @@ const Image& MoviePlayback::frame() const {
     return m_decoder ? m_decoder->frame() : kEmpty;
 }
 
-bool MoviePlayback::update(f64 deltaSeconds) {
+bool MoviePlayback::update(f64 deltaSeconds, std::optional<f64> audioSeconds) {
     m_frameChanged = false;
     if (!isOpen()) {
         return false;
     }
-    m_playTime += std::clamp(deltaSeconds, 0.0, kMaxStepSeconds);
+    if (!m_primed) {
+        m_primed = true;
+        deltaSeconds = 0.0;
+    }
+    if (audioSeconds.has_value() && *audioSeconds > m_audioClock) {
+        m_audioClock = *audioSeconds;
+        m_playTime = *audioSeconds;
+    } else {
+        m_playTime += std::clamp(deltaSeconds, 0.0, kMaxStepSeconds);
+    }
 
     const u32 due =
         std::min(static_cast<u32>(m_playTime * m_info.framesPerSecond), m_info.frameCount);

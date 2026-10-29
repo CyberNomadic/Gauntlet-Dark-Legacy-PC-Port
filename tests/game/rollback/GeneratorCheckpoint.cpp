@@ -72,6 +72,25 @@ ViewVolume view(ByteReader& reader) {
     value.cosY = real(reader);
     return value;
 }
+template <class Output> void views(Output& bytes, const ViewSet& value) {
+    word(bytes, value.count);
+    for (usize i = 0; i < ViewSet::kMost; ++i) {
+        view(bytes, value.eyes[i]);
+        vector(bytes, value.attentions[i]);
+    }
+}
+std::optional<ViewSet> views(ByteReader& reader) {
+    ViewSet value;
+    value.count = reader.readU32();
+    if (value.count > ViewSet::kMost) {
+        return std::nullopt;
+    }
+    for (usize i = 0; i < ViewSet::kMost; ++i) {
+        value.eyes[i] = view(reader);
+        value.attentions[i] = vector(reader);
+    }
+    return value;
+}
 template <class Output> void slot(Output& bytes, const Generators::Slot& value) {
     integer(bytes, value.minPlayers);
     word(bytes, static_cast<u32>(value.presence));
@@ -182,7 +201,6 @@ bool writeCanonical(Output& bytes, const Generators::Checkpoint& state, bool val
     }
     const usize size =
         GeneratorCheckpoint::kHeaderBytes + (state.view ? GeneratorCheckpoint::kViewBytes : 0) +
-        (state.attention ? GeneratorCheckpoint::kAttentionBytes : 0) +
         state.bodies.size() * GeneratorCheckpoint::kBodyBytes +
         (state.roster.size() + state.generators.size()) * GeneratorCheckpoint::kSlotBytes;
     bytes.reserve(size);
@@ -190,17 +208,14 @@ bool writeCanonical(Output& bytes, const Generators::Checkpoint& state, bool val
     word(bytes, static_cast<u32>(state.roster.size()));
     word(bytes, static_cast<u32>(state.generators.size()));
     word(bytes, static_cast<u32>(state.bodies.size()));
-    word(bytes, (state.view ? 1U : 0U) | (state.attention ? 2U : 0U));
+    word(bytes, (state.view ? 1U : 0U) | (state.attentionGate ? 2U : 0U));
     real(bytes, state.scales.health);
     real(bytes, state.scales.rate);
     real(bytes, state.scales.most);
     integer(bytes, state.players);
     word(bytes, state.specialBirth);
     if (state.view) {
-        view(bytes, *state.view);
-    }
-    if (state.attention) {
-        vector(bytes, *state.attention);
+        views(bytes, *state.view);
     }
     for (const auto& body : state.bodies) {
         integer(bytes, body.kind);
@@ -247,8 +262,7 @@ std::optional<Generators::Checkpoint> GeneratorCheckpoint::decode(std::span<cons
     // fixed widths. No malformed length can cause an unbounded allocation or a
     // ByteReader underflow, including optional-state flag changes.
     const usize size = kHeaderBytes + ((flags & 1U) != 0 ? kViewBytes : 0) +
-                       ((flags & 2U) != 0 ? kAttentionBytes : 0) + bodies * kBodyBytes +
-                       (roster + generators) * kSlotBytes;
+                       bodies * kBodyBytes + (roster + generators) * kSlotBytes;
     if (bytes.size() != size) {
         return std::nullopt;
     }
@@ -257,11 +271,12 @@ std::optional<Generators::Checkpoint> GeneratorCheckpoint::decode(std::span<cons
     state.players = integer(reader);
     state.specialBirth = reader.readU32();
     if ((flags & 1U) != 0) {
-        state.view = view(reader);
+        state.view = views(reader);
+        if (!state.view) {
+            return std::nullopt;
+        }
     }
-    if ((flags & 2U) != 0) {
-        state.attention = vector(reader);
-    }
+    state.attentionGate = (flags & 2U) != 0;
     state.bodies.reserve(bodies);
     for (usize index = 0; index < bodies; ++index) {
         state.bodies.push_back({integer(reader), {reader.readU32(), real(reader), real(reader)}});

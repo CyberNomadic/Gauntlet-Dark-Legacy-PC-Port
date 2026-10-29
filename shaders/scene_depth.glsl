@@ -1,7 +1,7 @@
 #ifdef MULTISAMPLED_DEPTH
-layout(set = 1, binding = 0) uniform sampler2DMS sceneDepth;
+SAMPLER_2DMS(1, sceneDepth)
 #else
-layout(set = 1, binding = 0) uniform sampler2D sceneDepth;
+SAMPLER_2D(1, sceneDepth)
 #endif
 float sceneDepthAt(vec2 at, vec2 pixel, int samples) {
     ivec2 size = ivec2(1.0 / pixel + 0.5);

@@ -11,6 +11,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
 #include "engine/io/Sha256.h"
+#include "engine/platform/Paths.h"
 
 namespace gdl {
 
@@ -28,7 +29,7 @@ bool StringTable::load(const std::filesystem::path& directory, std::string_view 
         m_language = language;
     } else if (any) {
         log::warn("Strings: language '{}' not found under {}; using '{}'", language,
-                  directory.string(), fallback);
+                  paths::utf8(directory), fallback);
         m_language = fallback;
     }
     return any;
@@ -48,13 +49,13 @@ std::vector<StringTable::Language> StringTable::available(const std::filesystem:
                 continue;
             }
             Language language;
-            language.code = entry.path().stem().string();
+            language.code = paths::utf8(entry.path().stem());
             language.name = root.contains("language.name") && root.at("language.name").is_string()
                                 ? root.at("language.name").get<std::string>()
                                 : language.code;
             languages.push_back(std::move(language));
         } catch (const std::exception& e) {
-            log::warn("Strings {}: {}", entry.path().string(), e.what());
+            log::warn("Strings {}: {}", paths::utf8(entry.path()), e.what());
         }
     }
     std::ranges::sort(languages, {}, &Language::code);
@@ -109,7 +110,7 @@ bool StringTable::merge(const std::filesystem::path& file) {
         }
         return true;
     } catch (const std::exception& e) {
-        log::warn("Strings {}: {}", file.string(), e.what());
+        log::warn("Strings {}: {}", paths::utf8(file), e.what());
         return false;
     }
 }

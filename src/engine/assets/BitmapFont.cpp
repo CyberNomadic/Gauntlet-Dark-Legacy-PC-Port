@@ -11,6 +11,7 @@
 #include "engine/io/AssetLocator.h"
 #include "engine/io/File.h"
 #include "engine/io/NativeStateDigest.h"
+#include "engine/platform/Paths.h"
 
 #include "formats/FontFile.h"
 
@@ -32,8 +33,9 @@ bool BitmapFont::load(const std::filesystem::path& file, s32 spaceWidth) {
     m_glyphs.clear();
     m_lookup.fill(-1);
     try {
-        const auto native = AssetLocator(file.parent_path()).find(file.stem().string() + ".fnt");
-        if (native || toLowerAscii(file.extension().string()) == ".fnt") {
+        const auto native =
+            AssetLocator(file.parent_path()).find(paths::utf8(file.stem()) + ".fnt");
+        if (native || toLowerAscii(paths::utf8(file.extension())) == ".fnt") {
             const auto source = formats::FontFile::parse(readFile(native.value_or(file)));
             if (source.height <= 0) {
                 throw std::runtime_error("font height must be positive");
@@ -61,7 +63,7 @@ bool BitmapFont::load(const std::filesystem::path& file, s32 spaceWidth) {
         }
         m_height = height;
     } catch (const std::exception& e) {
-        log::warn("Font {}: {}", file.string(), e.what());
+        log::warn("Font {}: {}", paths::utf8(file), e.what());
         m_glyphs.clear();
         m_height = 0;
         return false;
@@ -73,6 +75,24 @@ bool BitmapFont::load(const std::filesystem::path& file, s32 spaceWidth) {
 const BitmapGlyph* BitmapFont::glyph(u8 code) const {
     const s16 slot = m_lookup[code];
     return slot < 0 ? nullptr : &m_glyphs[static_cast<usize>(slot)];
+}
+
+bool BitmapFont::addCut(const Cut& cut) {
+    const auto inRange = [](s32 code) { return code > 0 && code < 256; };
+    if (!loaded() || !inRange(cut.code) || !inRange(cut.from) ||
+        glyph(static_cast<u8>(cut.code)) != nullptr) {
+        return false;
+    }
+    const BitmapGlyph* source = glyph(static_cast<u8>(cut.from));
+    if (source == nullptr || cut.left < 0 || cut.top < 0 || cut.columns <= 0 || cut.rows <= 0 ||
+        cut.left + cut.columns > source->width || cut.top + cut.rows > m_height || cut.lead < 0 ||
+        cut.at < 0 || cut.width < cut.lead + cut.columns || cut.at + cut.rows > m_height) {
+        return false;
+    }
+    m_glyphs.push_back({cut.code, cut.width, source->x + cut.left, source->y + cut.top, cut.lead,
+                        cut.at, cut.columns, cut.rows});
+    index();
+    return true;
 }
 
 void BitmapFont::index() {
@@ -96,11 +116,11 @@ void visitNativeState(NativeStateDigest& digest, const BitmapFont& font) {
         identity.values(height, spaceWidth);
         identity.wide(glyphs.size());
         for (const auto& glyph : glyphs) {
-            identity.fields<4>(glyph);
+            identity.fields<8>(glyph);
         }
         content = identity.finish();
     }
-    digest.string("bitmap-font/content/1");
+    digest.string("bitmap-font/content/2");
     digest.value(*content);
 }
 

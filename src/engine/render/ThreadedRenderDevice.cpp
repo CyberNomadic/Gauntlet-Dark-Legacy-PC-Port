@@ -55,6 +55,8 @@ struct ThreadedRenderDevice::Impl {
         }
         backend->setFramebufferSize(extent);
         samples = backend->presentationSampleCount();
+        // The device was made on this thread; from here on the worker owns it.
+        backend->detachFromThread();
         worker = std::thread([this] { run(); });
     }
     ~Impl() {
@@ -130,6 +132,7 @@ struct ThreadedRenderDevice::Impl {
     }
     void run() {
         try {
+            backend->attachToThread();
             for (;;) {
                 Command command;
                 {
@@ -258,8 +261,7 @@ void ThreadedRenderDevice::setSmoothSprites(bool enabled) {
     m_impl->configure([enabled](Impl& worker) { worker.backend->setSmoothSprites(enabled); });
 }
 void ThreadedRenderDevice::setAuthoredSilhouettes(bool enabled) {
-    m_impl->configure(
-        [enabled](Impl& worker) { worker.backend->setAuthoredSilhouettes(enabled); });
+    m_impl->configure([enabled](Impl& worker) { worker.backend->setAuthoredSilhouettes(enabled); });
 }
 std::unique_ptr<Texture> ThreadedRenderDevice::createTexture(const TextureDesc& desc,
                                                              std::span<const u8> pixels) {

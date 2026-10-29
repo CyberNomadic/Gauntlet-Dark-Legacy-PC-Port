@@ -7,6 +7,7 @@
 #include "engine/core/Types.h"
 #include "engine/io/File.h"
 #include "engine/io/Sha256.h"
+#include "engine/platform/Paths.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -55,7 +56,7 @@ std::string assetDigest(const std::filesystem::path& root, const std::stop_token
         if (!entry.is_regular_file()) {
             throw std::runtime_error("Unsupported native asset file");
         }
-        auto name = entry.path().lexically_relative(root).generic_string();
+        auto name = paths::genericUtf8(entry.path().lexically_relative(root));
         for (auto& c : name) {
             // Retail paths are ASCII. Reject non-ASCII mods instead of applying a different
             // locale-specific fold from the launcher's Unicode casefold.

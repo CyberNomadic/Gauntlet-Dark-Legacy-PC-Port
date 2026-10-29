@@ -4,6 +4,7 @@
 #include "engine/math/PortableMath.h"
 
 #include "game/characters/Progression.h"
+#include "game/level/ImportedLevel.h"
 #include "game/party/PlayerAttacks.h"
 
 namespace gdl::game {
@@ -141,8 +142,7 @@ void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
                 area.attack.reaches(parent, target, area.elapsed, area.lifetime, kind)) {
                 area.hit.push_back(target.id);
                 strikeTarget(target, area.attack.damageAt(area.elapsed, area.lifetime),
-                             area.attack.flags, player.actor, players, targets,
-                             BlowSource::Breath);
+                             area.attack.flags, player.actor, players, targets, BlowSource::Breath);
             }
         }
     }
@@ -159,6 +159,13 @@ void PlayerAttacks::updateItems(f32 seconds, std::span<PlayerRuntime> players,
 void PlayerAttacks::strikeTarget(const MissileTarget& target, f32 damage, u32 flags,
                                  const PlayerActor& owner, std::span<PlayerRuntime> players,
                                  const Targets& targets, BlowSource source) {
+    if (target.id >= kImportedTargetBase) {
+        if (m_resources && m_resources->world.imported()) {
+            m_resources->world.imported()->strike(target.id - kImportedTargetBase, damage, flags,
+                                                  owner.player());
+        }
+        return;
+    }
     // ProcessEffects' area query (CritterExpCollide) returns a horizontal unit
     // vector, not distance from the owner; that input is accumulated verbatim.
     const Vec3 away = target.base - owner.position();

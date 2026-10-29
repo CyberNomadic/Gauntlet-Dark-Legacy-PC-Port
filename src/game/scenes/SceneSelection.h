@@ -13,7 +13,18 @@ namespace gdl::game {
  * "enemy#3", which commands take as an argument through $SELECTED.
  */
 struct SceneSelection {
-    enum class Kind : u8 { Object, Enemy, Critter, Generator, Pickup, Player, Spawned };
+    enum class Kind : u8 {
+        Object,
+        Enemy,
+        Critter,
+        Generator,
+        Pickup,
+        Player,
+        Spawned,
+        Switch, ///< a trigger's pad, by the level's trigger index
+        Gate,   ///< a door a key opens, by the gates' index
+        Chest   ///< by the chests' index
+    };
 
     Kind kind = Kind::Object;
     s32 id = -1;      ///< the layout's object index, the swarm's slot, the pickup's index...

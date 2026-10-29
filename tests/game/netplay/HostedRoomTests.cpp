@@ -272,9 +272,11 @@ TEST_CASE("room rules are host owned replicated and invalidate every ready vote"
     REQUIRE(pair.guest.ready());
     pair.pump();
     const auto revision = pair.host.room()->revision;
-    const RoomSettings changed{3, 2, 1};
+    const RoomSettings changed{3, 2, 1, 1, 1}; // solo cameras and Aggressor Mode travel too
     CHECK_FALSE(pair.guestRoom.settings(changed));
-    CHECK_FALSE(pair.hostRoom.settings({1, 2, 1})); // already two joined
+    CHECK_FALSE(pair.hostRoom.settings({3, 2, 1, 2}));    // no third camera rule
+    CHECK_FALSE(pair.hostRoom.settings({3, 2, 1, 1, 2})); // Aggressor Mode is on or off
+    CHECK_FALSE(pair.hostRoom.settings({1, 2, 1}));       // already two joined
     CHECK_FALSE(pair.hostRoom.settings({4, 3, 0}));
     REQUIRE(pair.hostRoom.settings(changed));
     CHECK_FALSE(pair.hostRoom.start(revision));

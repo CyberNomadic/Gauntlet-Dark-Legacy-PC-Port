@@ -1,25 +1,34 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "platform.glsl"
+#include "immediate_constants.glsl"
 
+#ifdef GDL_OPENGL
+// OpenGL binds a texture and its sampler as one: the two stages are two samplers.
+const bool alphaToCoverage = GDL_ALPHA_TO_COVERAGE != 0;
+uniform sampler2D uImage;
+uniform sampler2D uSecondImage;
+#define uTexture uImage
+#define uSecondTexture uSecondImage
+#define SPRITE_SOURCE(image, filtering) sampler2D image
+#define SPRITE_SAMPLER(image, filtering) image
+#define SPRITE_ARGS(image, filtering) image
+#else
 layout(constant_id = 0) const bool alphaToCoverage = false;
-
 layout(set = 0, binding = 0) uniform texture2D uImage;
 layout(set = 1, binding = 0) uniform texture2D uSecondImage;
 layout(set = 2, binding = 0) uniform sampler uSampler;
 layout(set = 3, binding = 0) uniform sampler uSecondSampler;
-
 #define uTexture sampler2D(uImage, uSampler)
 #define uSecondTexture sampler2D(uSecondImage, uSecondSampler)
+#define SPRITE_SOURCE(image, filtering) texture2D image, sampler filtering
+#define SPRITE_SAMPLER(image, filtering) sampler2D(image, filtering)
+#define SPRITE_ARGS(image, filtering) image, filtering
+#endif
 
-layout(push_constant) uniform PushConstants {
-    mat4 transform;
-    vec4 params;
-    vec4 scale;
-    vec4 effectData0;
-} pc;
-
-layout(location = 0) in vec4 vColor;
-layout(location = 1) in vec2 vUv;
-layout(location = 2) in vec2 vUv2;
+VARYING(0) in vec4 vColor;
+VARYING(1) in vec2 vUv;
+VARYING(2) in vec2 vUv2;
 
 layout(location = 0) out vec4 outColor;
 
@@ -29,12 +38,12 @@ vec4 cubicWeights(float f) {
                 -3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0, f * f * f) / 6.0;
 }
 
-vec4 sampleSprite(texture2D image, sampler filtering, vec2 uv) {
-    vec4 original = texture(sampler2D(image, filtering), uv);
+vec4 sampleSprite(SPRITE_SOURCE(image, filtering), vec2 uv) {
+    vec4 original = texture(SPRITE_SAMPLER(image, filtering), uv);
     if (pc.effectData0.x < 0.5) {
         return original;
     }
-    vec2 size = vec2(textureSize(sampler2D(image, filtering), 0));
+    vec2 size = vec2(textureSize(SPRITE_SAMPLER(image, filtering), 0));
     float footprint = max(length(dFdx(uv) * size), length(dFdy(uv) * size));
     if (footprint >= 1.0) {
         return original; // Keep existing mipmap/anisotropic minification.
@@ -49,7 +58,7 @@ vec4 sampleSprite(texture2D image, sampler filtering, vec2 uv) {
     // Sample texel centres at LOD 0 to respect each sampler's native wrap/clamp modes.
     for (int y = 0; y < 4; ++y) {
         for (int x = 0; x < 4; ++x) {
-            vec4 texel = textureLod(sampler2D(image, filtering),
+            vec4 texel = textureLod(SPRITE_SAMPLER(image, filtering),
                                    (cell + vec2(x - 1, y - 1) + 0.5) / size, 0.0);
             filtered += vec4(texel.rgb * texel.a, texel.a) * wx[x] * wy[y];
         }
@@ -72,7 +81,7 @@ vec4 blendFrames(vec4 current, vec4 next, float fraction) {
 }
 
 void main() {
-    vec4 base = sampleSprite(uImage, uSampler, vUv);
+    vec4 base = sampleSprite(SPRITE_ARGS(uImage, uSampler), vUv);
     outColor = base * vColor;
     if (pc.scale.z > 0.5) {
         // Keep-alpha alternate-texture mode: the original skin supplies coverage, not colour.
@@ -88,7 +97,7 @@ void main() {
             discard;
         }
     } else if (pc.scale.z < 0.0) {
-        outColor = blendFrames(base, sampleSprite(uSecondImage, uSecondSampler, vUv),
+        outColor = blendFrames(base, sampleSprite(SPRITE_ARGS(uSecondImage, uSecondSampler), vUv),
                                -pc.scale.z) * vColor;
     } else if (pc.effectData0.y > 0.5) {
         // An authored silhouette: the second texture's clear texels cut the draw away.

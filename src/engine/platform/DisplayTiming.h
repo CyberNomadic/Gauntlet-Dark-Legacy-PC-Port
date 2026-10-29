@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -87,43 +86,6 @@ struct FrameTimingTotals {
     f64 framesPerSecond() const;
     f64 average(FrameTimingPhase phase) const;
     f64 maximum(FrameTimingPhase phase) const;
-};
-
-/** The spike tracer's setting: how long a frame's work may run before it is reported. */
-struct SpikeThreshold {
-    static constexpr f64 kBudgets = 3.0; ///< the automatic setting, in frame budgets
-    std::optional<f64> milliseconds;      ///< none follows the display; 0 reports nothing
-    bool operator==(const SpikeThreshold&) const = default;
-
-    /** The threshold at `frameRate`, in milliseconds; 0 reports nothing. */
-    f64 at(u32 frameRate) const {
-        if (milliseconds.has_value()) {
-            return std::max(*milliseconds, 0.0);
-        }
-        return kBudgets * 1000.0 / static_cast<f64>(std::max(frameRate, 1U));
-    }
-    /** "off", "auto" or a number of milliseconds; nothing for anything else. */
-    static std::optional<SpikeThreshold> parse(std::string_view text) {
-        if (text == "off" || text == "0") {
-            return SpikeThreshold{0.0};
-        }
-        if (text == "auto") {
-            return SpikeThreshold{};
-        }
-        f64 value = 0;
-        const auto* end = text.data() + text.size();
-        const auto [parsed, error] = std::from_chars(text.data(), end, value);
-        if (error != std::errc{} || parsed != end || !(value > 0)) {
-            return std::nullopt;
-        }
-        return SpikeThreshold{value};
-    }
-    std::string describe() const {
-        if (!milliseconds.has_value()) {
-            return "auto (three frame budgets)";
-        }
-        return *milliseconds > 0 ? std::to_string(*milliseconds) + " ms" : "off";
-    }
 };
 
 } // namespace gdl
