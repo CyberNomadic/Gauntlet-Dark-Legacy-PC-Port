@@ -50,7 +50,7 @@ std::string text(std::span<const u8> bytes, usize at, usize length) {
     while (count < length && bytes[at + count] != 0) {
         ++count;
     }
-    return {reinterpret_cast<const char*>(bytes.data() + at), count};
+    return {std::bit_cast<const char*>(bytes.data() + at), count};
 }
 
 } // namespace
@@ -81,7 +81,7 @@ LegendsDreamcastScene LegendsDreamcastScene::parse(std::span<const u8> worlds) {
     WorldFile decoded = WorldFile::parse(worlds);
     for (const auto& info : decoded.itemInfos) {
         if (info.type == ItemInfoRecord::kChoiceList) {
-            for (s16 choice : info.choices) {
+            for (const s16 choice : info.choices) {
                 require(choice >= 0 && static_cast<usize>(choice) < infoCount,
                         "random item definition reference out of bounds");
             }
@@ -248,21 +248,23 @@ std::string dreamcastLegendsFixtureName(const ItemInfoRecord& info,
         return instance.name.empty() ? info.name : instance.name;
     }
     // SetGenName (8c0a8100) replaces the normal instance-name override.
-    s32 tier = std::max<s32>(std::bit_cast<s8>(instance.params[0]), 1);
+    const s32 tier = std::max<s32>(std::bit_cast<s8>(instance.params[0]), 1);
     if (scope.realmType == 5 || scope.realmType == 6) {
         return scope.realmType == 5 ? "GEN_SPECIAL2" : "GEN_SPECIAL3";
     }
     // Enemy prefix table at 8c121acc (36-byte entries), only generator species.
-    constexpr std::array<std::string_view, 21> prefixes{
+    constexpr std::array<std::string_view, 21> kPrefixes{
         "SCO", "TRO", "DEM", "RAT", "GRU", "KNI", "SNA", "SOR", "MUM", "SPI", "LIZ",
         "TRE", "MAG", "ZOM", "PLA", "WOL", "ICE", "WRM", "DOG", "SKE", "KNI"};
     const std::string named = lower(info.name);
+    // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto found = std::ranges::find_if(
-        prefixes, [&](std::string_view prefix) { return lower(prefix) == named; });
-    if (found == prefixes.end()) {
+        kPrefixes, [&](std::string_view prefix) { return lower(prefix) == named; });
+    if (found == kPrefixes.end()) {
         return {};
     }
-    s32 kind = static_cast<s32>(found - prefixes.begin());
+    s32 kind = static_cast<s32>(found - kPrefixes.begin());
     // 8c08ff40 receives initial generator c6=0: RAT uses the small class;
     // GRU/KNI prefer the primary class, then the secondary class, then itself.
     if (kind == 3) {
@@ -274,10 +276,10 @@ std::string dreamcastLegendsFixtureName(const ItemInfoRecord& info,
             kind = scope.enemyClasses[3];
         }
     }
-    if (kind < 0 || static_cast<usize>(kind) >= prefixes.size()) {
+    if (kind < 0 || static_cast<usize>(kind) >= kPrefixes.size()) {
         return {};
     }
-    return "GEN_" + std::string(prefixes[static_cast<usize>(kind)]) + std::to_string(tier);
+    return "GEN_" + std::string(kPrefixes[static_cast<usize>(kind)]) + std::to_string(tier);
 }
 
 } // namespace gdl::formats

@@ -22,9 +22,9 @@ class ImportedRoster final : public ImportedLevel {
 public:
     std::vector<ImportedGenerator> roster;
     void capturePresentation() override {}
-    void update(f32, bool) override {}
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
-    }
+    void update(f32 /*seconds*/, bool /*timeStopped*/) override {}
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {}
     std::span<const ImportedGenerator> importedGenerators() const override { return roster; }
 };
 
@@ -51,8 +51,8 @@ TEST_CASE("Imported opponent counterparts retain audible hit death and generator
     auto imported = std::make_shared<ImportedRoster>();
     // Every native species currently admitted by legendsN64Generator. These
     // are GDL counterparts, so use their actual WDATA voice roster and banks.
-    constexpr std::array<s32, 14> kinds{0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19};
-    for (const auto kind : kinds) {
+    constexpr std::array<s32, 14> kKinds{0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19};
+    for (const auto kind : kKinds) {
         ImportedGenerator generator;
         generator.nativeIndex = static_cast<u32>(kind);
         generator.kind = kind;
@@ -76,9 +76,10 @@ TEST_CASE("Imported opponent counterparts retain audible hit death and generator
     LevelRef ref;
     ref.realmId = -1;
     ref.name = "n64:opponent-audio-test";
-    REQUIRE(world.loadImported(device, root, ref,
-                               WorldLayout::fromDecoded({}, {}, {-100, 0, -100}, {100, 20, 100}),
-                               std::move(collision), imported));
+    const bool loaded = world.loadImported(
+        device, root, ref, WorldLayout::fromDecoded({}, {}, {-100, 0, -100}, {100, 20, 100}),
+        std::move(collision), imported);
+    REQUIRE(loaded);
     AudioMixer mixer(48000);
     SoundPlayer output(mixer);
     LevelSoundscape audio;
@@ -89,11 +90,11 @@ TEST_CASE("Imported opponent counterparts retain audible hit death and generator
     std::array<PlayerRuntime, 1> party;
     opponents.open({device, world, weapons, effects, audio, root}, party);
     REQUIRE(opponents.levelNow());
-    REQUIRE(opponents.levelNow()->enemies.size() == kinds.size());
-    REQUIRE(opponents.importedGeneratorStates().size() == kinds.size());
+    REQUIRE(opponents.levelNow()->enemies.size() == kKinds.size());
+    REQUIRE(opponents.importedGeneratorStates().size() == kKinds.size());
     const auto roster = opponents.levelNow()->enemies;
     std::set<std::string> tested;
-    for (const s32 kind : kinds) {
+    for (const s32 kind : kKinds) {
         CAPTURE(kind);
         for (const s32 tier : {1, 3}) {
             for (const bool close : {false, true}) {
@@ -124,10 +125,10 @@ TEST_CASE("Imported opponent counterparts retain audible hit death and generator
     events.award = [](s32, s32, bool) {};
     events.levels = [] {};
     const std::array views{EnemyView{.player = 0, .position = {0, 0, -10}}};
-    for (usize i = 0; i < kinds.size(); ++i) {
-        CAPTURE(kinds[i]);
+    for (usize i = 0; i < kKinds.size(); ++i) {
+        CAPTURE(kKinds[i]);
         EnemySpawn spawn;
-        spawn.kind = kinds[i];
+        spawn.kind = kKinds[i];
         spawn.tier = 3;
         spawn.placed = true;
         spawn.position = {0, 0, 0};
@@ -150,9 +151,9 @@ TEST_CASE("Imported opponent counterparts retain audible hit death and generator
         // The sorted catalog begins with TEST/T1/T2 (realm0), whose roster
         // contains these species but has no generator bank for the T prefix.
         // Native campaign WDATA instead assigns MOUNT/B1 and BATTLE/H1.
-        if (kinds[i] == 0 || kinds[i] == 1) {
+        if (kKinds[i] == 0 || kKinds[i] == 1) {
             CHECK(generatorSound == "S_GENDAMB");
-        } else if (kinds[i] == 19) {
+        } else if (kKinds[i] == 19) {
             CHECK(generatorSound == "S_GENDAMH");
         }
         opponents.strikeGenerator(state.pool, 110, 0, party);

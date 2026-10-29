@@ -91,8 +91,8 @@ Vec3 resolveCylinder(const Vec3& centre, f32 cylinderRadius, f32 halfHeight, con
     const f64 inward = std::min(0.0, remainingX * nx + remainingZ * nz);
     remainingX -= inward * nx;
     remainingZ -= inward * nz;
-    Vec3 result{static_cast<f32>(from.x + dx * enter + remainingX), to.y,
-                static_cast<f32>(from.z + dz * enter + remainingZ)};
+    const Vec3 result{static_cast<f32>(from.x + dx * enter + remainingX), to.y,
+                      static_cast<f32>(from.z + dz * enter + remainingZ)};
     if (!finite(result)) {
         return from;
     }

@@ -50,7 +50,7 @@ TEST_CASE("N64 macro decoding preserves REV_LEVEL and rejects unknown commands",
     macro.readCmds<std::endian::big>(reader, 8);
     REQUIRE(macro.m_cmds.size() == 1);
     REQUIRE(macro.getCmd(0).Isa() == amuse::SoundMacro::CmdOp::ReverbLevel);
-    const auto& reverb = static_cast<const amuse::SoundMacro::CmdReverbLevel&>(macro.getCmd(0));
+    const auto& reverb = dynamic_cast<const amuse::SoundMacro::CmdReverbLevel&>(macro.getCmd(0));
     CHECK(reverb.scale == 64);
     CHECK(reverb.add == 127);
     amuse::SoundMacroState state;
@@ -156,15 +156,15 @@ TEST_CASE("N64 effect sources rewind independently and outlive their bank facade
     auto second = effects.create(0x71);
     REQUIRE(first);
     REQUIRE(second);
-    const auto expected = render(*first, 32000 * 8, 4096);
+    const auto expected = render(*first, usize{32000} * 8, 4096);
     CHECK(audible(expected));
-    REQUIRE(expected.size() < 32000 * 8 * 2); // one-shot macro reaches EOF
+    REQUIRE(expected.size() < usize{32000} * 8 * 2); // one-shot macro reaches EOF
     std::vector<f32> unchanged{.25f};
     CHECK_FALSE(first->read(unchanged, 160));
     CHECK(unchanged.size() == 1);
     for (const usize chunk : {1U, 997U, 8191U}) {
         first->rewind();
-        const auto repeated = render(*first, 32000 * 8, chunk);
+        const auto repeated = render(*first, usize{32000} * 8, chunk);
         CHECK(std::equal(expected.begin(), expected.end(), repeated.begin(), repeated.end()));
     }
     first->rewind();
@@ -172,7 +172,7 @@ TEST_CASE("N64 effect sources rewind independently and outlive their bank facade
     CHECK(audible(other));
     CHECK_FALSE(effects.open(directory / "missing"));
     CHECK_FALSE(effects.opened());
-    const auto surviving = render(*first, 32000 * 8, 997);
+    const auto surviving = render(*first, usize{32000} * 8, 997);
     CHECK(std::equal(expected.begin(), expected.end(), surviving.begin(), surviving.end()));
     second->rewind();
     const auto repeatedOther = render(*second, 10000, 997);
@@ -199,7 +199,7 @@ TEST_CASE("Native interactive fixture macros finish without a synthetic key off"
         usize frames = 0;
         bool heard = false;
         bool finished = false;
-        while (frames < 32000 * 20) {
+        while (frames < usize{32000} * 20) {
             chunk.clear();
             if (!source->read(chunk, 4096)) {
                 finished = true;
@@ -282,11 +282,11 @@ TEST_CASE("N64 effect bank authentication rejects changed samples and macros",
         SKIP("Native N64 audio extraction is not installed");
     }
     const auto directory = test::scratchDirectory("n64-effects-modified");
-    constexpr std::array names{"gauntlet.proj", "gauntlet.pool", "gauntlet.sdir", "gauntlet.samp"};
-    for (const auto* name : names) {
+    constexpr std::array kNames{"gauntlet.proj", "gauntlet.pool", "gauntlet.sdir", "gauntlet.samp"};
+    for (const auto* name : kNames) {
         writeFile(directory / name, readFile(source / name));
     }
-    for (const auto* name : names) {
+    for (const auto* name : kNames) {
         CAPTURE(name);
         auto bytes = readFile(source / name);
         bytes[bytes.size() / 2] ^= 1;

@@ -12,7 +12,7 @@ bool finite(const Vec3& value) {
 }
 } // namespace
 
-LegendsBlast::LegendsBlast(LegendsFixtureEvent event, f32 damageScale) : m_event(std::move(event)) {
+LegendsBlast::LegendsBlast(LegendsFixtureEvent event, f32 damageScale) : m_event(event) {
     if (!finite(m_event.position) || !std::isfinite(m_event.radius) || m_event.radius <= 0 ||
         m_event.radius > 64 || !std::isfinite(m_event.damage) || m_event.damage < 0 ||
         !std::isfinite(damageScale) || damageScale < 0 ||

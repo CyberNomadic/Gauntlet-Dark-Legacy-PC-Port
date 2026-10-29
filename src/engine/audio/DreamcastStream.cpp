@@ -1,6 +1,7 @@
 #include "engine/audio/DreamcastStream.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <exception>
 
@@ -25,7 +26,7 @@ bool DreamcastStream::open(const std::filesystem::path& path) {
         }
         m_file.seekg(0);
         std::array<u8, 0x800> header{};
-        m_file.read(reinterpret_cast<char*>(header.data()), header.size());
+        m_file.read(std::bit_cast<char*>(header.data()), header.size());
         const u32 tracks = readU32LE(header, 0);
         const u32 rate = readU32LE(header, 4);
         const u32 codec = readU32LE(header, 8);
@@ -71,10 +72,10 @@ bool DreamcastStream::read(std::vector<f32>& out, usize frames) {
     // AICA's standard Yamaha ADPCM scale factors. STR stores one planar
     // interleave per channel, low nibble first; state persists across blocks.
     // Independently checked against FFmpeg's dcstr/adpcm_aica output.
-    constexpr std::array<s32, 8> factors{230, 230, 230, 230, 307, 409, 512, 614};
+    constexpr std::array<s32, 8> kFactors{230, 230, 230, 230, 307, 409, 512, 614};
     for (usize frame = 0; frame < wanted; ++frame) {
         if (m_blockFrame == m_interleave * 2) {
-            m_file.read(reinterpret_cast<char*>(m_block.data()),
+            m_file.read(std::bit_cast<char*>(m_block.data()),
                         static_cast<std::streamsize>(m_block.size()));
             if (!m_file) {
                 m_frame = m_frames;
@@ -89,7 +90,7 @@ bool DreamcastStream::read(std::vector<f32>& out, usize frames) {
             const s32 delta = state.step * (static_cast<s32>(nibble & 7U) * 2 + 1) / 8;
             state.sample =
                 std::clamp(state.sample + ((nibble & 8U) != 0 ? -delta : delta), -32768, 32767);
-            state.step = std::clamp(state.step * factors[nibble & 7U] / 256, 127, 24576);
+            state.step = std::clamp(state.step * kFactors[nibble & 7U] / 256, 127, 24576);
             out.push_back(static_cast<f32>(state.sample) / 32768.0f);
         }
         ++m_blockFrame;

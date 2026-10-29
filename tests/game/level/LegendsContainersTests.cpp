@@ -270,8 +270,9 @@ TEST_CASE("Native barrel and chest art release pickups through the ordinary acto
         }
         // This test exercises fixed authored gold; selector choices have their
         // own shared-clock coverage and need not select gold when opened.
-        if ((readU16BE(placements, containerRecords + target.nativeIndex * 16 + 12) >> 8U) ==
-            0x22) {
+        if ((readU16BE(placements,
+                       containerRecords + static_cast<usize>(target.nativeIndex) * 16 + 12) >>
+             8U) == 0x22) {
             continue;
         }
         if ((target.breakable && testedBarrel) || (!target.breakable && testedChest)) {
@@ -489,7 +490,8 @@ TEST_CASE("All native explosive barrel placements retain their trap identity and
     const auto randoms = readFile(root / "items/generic/prnd.rom");
     const LegendsN64Templates templates{powerups,  decorations, generators, traps,
                                         teleports, containers,  randoms};
-    usize fire = 0, poison = 0;
+    usize fire = 0;
+    usize poison = 0;
     for (const auto& entry : std::filesystem::directory_iterator(root / "levels")) {
         if (!std::filesystem::is_regular_file(entry.path() / "worlds.wad")) {
             continue;

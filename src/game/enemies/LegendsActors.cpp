@@ -34,9 +34,9 @@ const TreeInfo* idleTree(const ImportedActor& actor, ItemArchive& archive) {
     // Exactly the body lookup used by Enemies::loadKind/initialise, including
     // the A/B/S variants. Missing variants retain their corresponding base tier.
     if (actor.spawn.tier >= 4 && actor.spawn.tier <= 6) {
-        constexpr std::array suffixes{"A", "B", "S"};
+        constexpr std::array kSuffixes{"A", "B", "S"};
         if (const auto* tree = find(
-                std::format("{}{}", prefix, suffixes[static_cast<usize>(actor.spawn.tier - 4)]))) {
+                std::format("{}{}", prefix, kSuffixes[static_cast<usize>(actor.spawn.tier - 4)]))) {
             return tree;
         }
     }

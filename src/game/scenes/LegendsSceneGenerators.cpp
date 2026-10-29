@@ -61,12 +61,12 @@ void LegendsSceneAdapter::bindN64Generator(
         binding.figures[state] = slot;
         m_hiddenFixtures[slot] = true;
         const auto* sequence = m_fixtures[slot].sequenceInfo(0);
-        m_fixtures[slot].play(0, sequence && sequence->repeats);
+        m_fixtures[slot].play(0, sequence != nullptr && sequence->repeats);
     }
     // Native e0067818 can remap a generic template to this level's species.
     // Keep the survey's original figure until the GDL pool confirms admission.
     m_generators.push_back(std::move(definition->gameplay));
-    m_generatorPresentation.push_back(std::move(binding));
+    m_generatorPresentation.push_back(binding);
 }
 
 void LegendsSceneAdapter::updateGenerators(std::span<const ImportedGeneratorState> states) {
@@ -97,7 +97,7 @@ void LegendsSceneAdapter::updateGenerators(std::span<const ImportedGeneratorStat
             if (figure) {
                 m_hiddenFixtures[*figure] = false;
                 const auto* sequence = m_fixtures[*figure].sequenceInfo(0);
-                m_fixtures[*figure].play(0, sequence && sequence->repeats);
+                m_fixtures[*figure].play(0, sequence != nullptr && sequence->repeats);
                 m_fixtures[*figure].capturePresentation();
             }
         }

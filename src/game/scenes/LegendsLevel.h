@@ -12,14 +12,15 @@ namespace gdl::game {
 class LegendsLevel final : public ImportedLevel {
 public:
     LegendsLevel(RenderDevice& device, const formats::LegendsMap& map,
-                 std::unique_ptr<LegendsSceneAdapter> adapter, std::filesystem::path directory,
+                 std::unique_ptr<LegendsSceneAdapter> adapter,
+                 const std::filesystem::path& directory,
                  const std::filesystem::path& characterRoot);
     void capturePresentation() override;
     void update(f32 seconds, bool timeStopped) override;
     void bindCollision(WorldCollision& collision) const override;
     void syncCollision(WorldCollision& collision) const override;
-    void draw(RenderDevice& device, const Mat4& clip, const WorldCamera& camera,
-              TreeModel::Pass pass, f32 alpha) const override;
+    void draw(RenderDevice& device, const Mat4& clip, const WorldCamera& view, TreeModel::Pass pass,
+              f32 alpha) const override;
     void resetCamera(std::span<const CameraSubject> subjects) override;
     void followCamera(std::span<const CameraSubject> subjects, f32 seconds) override;
     std::optional<WorldCamera> camera(f32 alpha = -1) const override;

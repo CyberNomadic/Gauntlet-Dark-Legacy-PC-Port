@@ -127,7 +127,8 @@ TEST_CASE("Native trap collision translates full box dimensions and semantic imp
 }
 
 TEST_CASE("Native trap clocks agree at30 and60Hz", "[legends][native-traps]") {
-    LegendsTrap slow{definition(), 1, 12}, fast{definition(), 1, 12};
+    LegendsTrap slow{definition(), 1, 12};
+    LegendsTrap fast{definition(), 1, 12};
     for (s32 tick = 0; tick < 600; ++tick) {
         slow.advance(1.0f / 30, true, false, true);
         fast.advance(1.0f / 60, true, false, true);

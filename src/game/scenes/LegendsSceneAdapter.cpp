@@ -21,8 +21,8 @@
 #include "formats/LegendsN64Texture.h"
 #include "formats/LegendsN64Tower.h"
 #include "formats/LegendsSceneMotion.h"
-#include "game/level/LegendsPortalAppearance.h"
 #include "game/enemies/EnemyKinds.h"
+#include "game/level/LegendsPortalAppearance.h"
 #include "game/scenes/LegendsInitialPose.h"
 #include "game/scenes/LegendsScrolls.h"
 
@@ -48,8 +48,8 @@ TextureSet textureSet(std::vector<formats::LegendsMapTexture> textures) {
     for (auto& texture : textures) {
         TextureSetEntry entry;
         entry.name = std::move(texture.name);
-        entry.width = texture.width ? texture.width : texture.image.width;
-        entry.height = texture.height ? texture.height : texture.image.height;
+        entry.width = texture.width != 0 ? texture.width : texture.image.width;
+        entry.height = texture.height != 0 ? texture.height : texture.image.height;
         entry.clampU = texture.clampU;
         entry.clampV = texture.clampV;
         entry.flags = texture.hasTransparency ? TextureSetEntry::kHasAlpha : 0;
@@ -71,18 +71,16 @@ TextureSet n64Textures(const AssetLocator& files, std::span<const u8> bytes,
     // Archive-load property7 cycles supply these native placeholder slots before
     // any drawable uses them. They are not ordinary cross-archive name references.
     for (const auto& cycle : animation.textureAnimations) {
-        if (cycle.flag != -1 || cycle.texture < 0 || cycle.source < 0 ||
-            cycle.frames <= 0) {
+        if (cycle.flag != -1 || cycle.texture < 0 || cycle.source < 0 || cycle.frames <= 0) {
             continue;
         }
-        const usize target = static_cast<usize>(cycle.texture);
-        const usize first = static_cast<usize>(cycle.source);
-        const usize count = static_cast<usize>(cycle.frames);
+        const auto target = static_cast<usize>(cycle.texture);
+        const auto first = static_cast<usize>(cycle.source);
+        const auto count = static_cast<usize>(cycle.frames);
         if (target >= decoded.size() || first >= decoded.size() || count > decoded.size() - first) {
             throw FormatError("N64 shared texture cycle is outside its archive");
         }
-        const s32 frame =
-            (cycle.start % cycle.frames + cycle.frames) % cycle.frames;
+        const s32 frame = (cycle.start % cycle.frames + cycle.frames) % cycle.frames;
         const auto& source = decoded[first + static_cast<usize>(frame)];
         auto& destination = decoded[target];
         if (destination.external && !source.external && !source.image.pixels.empty()) {
@@ -97,6 +95,7 @@ TextureSet n64Textures(const AssetLocator& files, std::span<const u8> bytes,
     }
     formats::resolveLegendsN64ColorRamps(models, decoded, animation, &warnings);
     std::vector<formats::LegendsMapTexture> textures;
+    textures.reserve(decoded.size());
     for (auto& texture : decoded) {
         textures.push_back({std::move(texture.image), texture.clampU, texture.clampV,
                             texture.hasTransparency, std::move(texture.name), texture.external,
@@ -298,7 +297,7 @@ void LegendsSceneAdapter::loadDreamcast(RenderDevice& device,
                                                              paths::utf8(directory.filename()))
                      : std::nullopt;
     if (!scope) {
-        m_warnings.push_back("No native level metadata supplies this map's fixture libraries.");
+        m_warnings.emplace_back("No native level metadata supplies this map's fixture libraries.");
         return;
     }
     for (const auto& relative : scope->archives) {
@@ -394,13 +393,12 @@ void LegendsSceneAdapter::loadN64(RenderDevice& device, const std::filesystem::p
                                                paths::utf8(directory.filename()), collision);
     for (auto& actor : actors.actors) {
         if (shownToParty(actor.minimumPlayers, m_playerCount)) {
-            m_actors.push_back(std::move(actor));
+            m_actors.push_back(actor);
         }
     }
     m_warnings.insert(m_warnings.end(), actors.warnings.begin(), actors.warnings.end());
-    if (std::ranges::any_of(m_actors, [](const ImportedActor& actor) {
-            return actor.spawn.kind == kItKind;
-        })) {
+    if (std::ranges::any_of(
+            m_actors, [](const ImportedActor& actor) { return actor.spawn.kind == kItKind; })) {
         // Native species23's exact e006c0c4/e006a640 route. It is a small
         // billboard with an archive-load texture cycle, not a GC enemy skin.
         try {
@@ -409,7 +407,7 @@ void LegendsSceneAdapter::loadN64(RenderDevice& device, const std::filesystem::p
                 m_itArchive = archive.get();
                 m_archives.push_back(std::move(archive));
             } else {
-                m_warnings.push_back("Native It artwork is unavailable: it/IT:WALK.");
+                m_warnings.emplace_back("Native It artwork is unavailable: it/IT:WALK.");
             }
         } catch (const FileError& error) {
             m_warnings.push_back("Native It artwork is unavailable: " + std::string{error.what()});
@@ -428,7 +426,7 @@ void LegendsSceneAdapter::loadN64(RenderDevice& device, const std::filesystem::p
     const auto trapScale = formats::legendsN64TrapScale(program, paths::utf8(directory.filename()));
     m_warnings.insert(m_warnings.end(), hazards.warnings.begin(), hazards.warnings.end());
     if (!hazards.traps.empty() && !trapScale) {
-        m_warnings.push_back("Native trap stage damage scale is unavailable.");
+        m_warnings.emplace_back("Native trap stage damage scale is unavailable.");
     }
     const auto obelisks = placements.empty() ? formats::LegendsN64Obelisks{}
                                              : formats::decodeLegendsN64Obelisks(placements, traps);
@@ -542,7 +540,7 @@ void LegendsSceneAdapter::loadN64(RenderDevice& device, const std::filesystem::p
         if (pickup.offer.kind == static_cast<s32>(ItemKind::Scroll)) {
             pickup.scrollPages = loadLegendsN64Scroll(directory, program, pickup.offer.amount);
             if (pickup.scrollPages.empty()) {
-                m_warnings.push_back("Native scroll text is unavailable for this placement.");
+                m_warnings.emplace_back("Native scroll text is unavailable for this placement.");
             }
         }
     };
@@ -646,7 +644,7 @@ void LegendsSceneAdapter::selectPortal(usize index) {
     auto& figure = m_fixtures[portal.active];
     const auto* info = figure.sequenceInfo(0);
     const bool transition = variant == 1 || variant == 3;
-    figure.play(0, !transition && info && info->repeats);
+    figure.play(0, !transition && info != nullptr && info->repeats);
     figure.capturePresentation();
 }
 
@@ -810,7 +808,7 @@ void LegendsSceneAdapter::loadN64Tower(RenderDevice& device, const std::filesyst
     if (sumner && podium) {
         m_tower = std::move(tower);
     } else {
-        m_warnings.push_back("Tower scripted idle artwork is incomplete.");
+        m_warnings.emplace_back("Tower scripted idle artwork is incomplete.");
     }
 }
 
@@ -869,6 +867,7 @@ void LegendsSceneAdapter::bindWorld(RenderDevice& device, const formats::Legends
     }
     m_worldTextures = textureSet(map.textures);
     std::vector<TextureSet*> lenders;
+    lenders.reserve(m_archives.size());
     for (auto& archive : m_archives) {
         lenders.push_back(&archive->textures);
     }

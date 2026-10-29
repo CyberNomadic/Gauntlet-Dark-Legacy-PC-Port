@@ -82,7 +82,7 @@ std::vector<ImmediateVertex> relicVertices(const test::FakeRenderDevice& device,
     std::vector<ImmediateVertex> result;
     for (const auto& draw : device.draws) {
         const auto* texture = dynamic_cast<const test::FakeTexture*>(draw.texture);
-        if (texture && std::ranges::find(images, texture->pixels) != images.end()) {
+        if (texture != nullptr && std::ranges::find(images, texture->pixels) != images.end()) {
             result.insert(result.end(), draw.vertices.begin(), draw.vertices.end());
         }
     }
@@ -231,10 +231,11 @@ TEST_CASE("Native obelisk grants are shared and a spent obelisk remains a visibl
         }
         return result;
     };
-    constexpr std::array<std::string_view, 3> readyNames{"WIZ_OBFRONT", "WIZ_OBSIDE", "WIZ_TOP"};
-    constexpr std::array<std::string_view, 3> spentNames{"WIZ_OBFRONT2", "WIZ_OBSIDE2", "WIZ_TOP2"};
-    const auto readyImages = namedImages(readyNames);
-    const auto spentImages = namedImages(spentNames);
+    constexpr std::array<std::string_view, 3> kReadyNames{"WIZ_OBFRONT", "WIZ_OBSIDE", "WIZ_TOP"};
+    constexpr std::array<std::string_view, 3> kSpentNames{"WIZ_OBFRONT2", "WIZ_OBSIDE2",
+                                                          "WIZ_TOP2"};
+    const auto readyImages = namedImages(kReadyNames);
+    const auto spentImages = namedImages(kSpentNames);
     for (usize i = 0; i < readyImages.size(); ++i) {
         REQUIRE(readyImages[i] != spentImages[i]);
     }
@@ -246,7 +247,7 @@ TEST_CASE("Native obelisk grants are shared and a spent obelisk remains a visibl
     });
     REQUIRE(found != pickups.end());
     const usize index = static_cast<usize>(found - pickups.begin());
-    const auto pickup = *found;
+    const auto& pickup = *found;
     REQUIRE(pickup.award->index == 0);
     CharacterSave save;
     save.progress().health = 500;

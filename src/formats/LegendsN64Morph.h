@@ -9,7 +9,7 @@
 
 namespace gdl::formats {
 
-inline constexpr usize kLegendsN64VariantByteLimit = 64U * 1024U * 1024U;
+inline constexpr usize kLegendsN64VariantByteLimit = usize{64} * 1024 * 1024;
 
 /** Overflow-safe storage charge for mesh copies and their source-vertex identity.
  * Includes mesh/part records and vertex/index arrays; throws before cloning if

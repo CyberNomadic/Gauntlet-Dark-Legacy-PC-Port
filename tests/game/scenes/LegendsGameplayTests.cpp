@@ -35,12 +35,15 @@ public:
     WorldCamera view{{-30, 30, 0}, kPi / 4, kPi / 2, 0};
 
     void capturePresentation() override { ++captures; }
-    void update(f32, bool) override {}
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
+    void update(f32 /*seconds*/, bool /*timeStopped*/) override {}
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {}
+    void followCamera(std::span<const CameraSubject> /*subjects*/, f32 /*seconds*/) override {
+        ++follows;
     }
-    void followCamera(std::span<const CameraSubject>, f32) override { ++follows; }
-    std::optional<WorldCamera> camera(f32 = -1) const override { return view; }
-    void updateParty(std::span<PlayerActor*> players, f32, bool) override {
+    std::optional<WorldCamera> camera(f32 /*alpha*/ = -1) const override { return view; }
+    void updateParty(std::span<PlayerActor*> players, f32 /*seconds*/,
+                     bool /*timeStopped*/) override {
         ++partyUpdates;
         partySize = players.size();
     }
@@ -71,8 +74,9 @@ struct GameplayFixture {
         ref.realm = "Legends";
         ref.name = "native-visit";
         ref.title = "Native visit";
-        REQUIRE(world.loadImported(device, root, ref, std::move(layout), std::move(collision),
-                                   std::move(imported)));
+        const bool loaded = world.loadImported(device, root, ref, std::move(layout),
+                                               std::move(collision), std::move(imported));
+        REQUIRE(loaded);
         GameContext context;
         context.config = &config;
         context.strings = &strings;
@@ -356,7 +360,7 @@ TEST_CASE("Native Tower exits wait for the party then spin and shrink with nativ
     const auto found = std::ranges::find_if(
         adapter->portals(), [](const auto& portal) { return portal.map == "mount1"; });
     REQUIRE(found != adapter->portals().end());
-    const auto portal = *found;
+    const auto& portal = *found;
     const std::array party{member(0), member(1)};
     LegendsTraversal probe;
     probe.open(map, 0, party[0].save);

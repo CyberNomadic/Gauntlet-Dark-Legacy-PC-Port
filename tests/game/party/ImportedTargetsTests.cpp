@@ -71,9 +71,9 @@ public:
     std::vector<ImportedTarget> bodies{{0, {0, 0, 2}, 1, 3, true, false},
                                        {1, {0, 0, 5}, 1, 1, false, true}};
     void capturePresentation() override {}
-    void update(f32, bool) override {}
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
-    }
+    void update(f32 /*seconds*/, bool /*timeStopped*/) override {}
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {}
     std::vector<ImportedTarget> targets() const override { return bodies; }
     bool strike(s32 id, f32 power, u32 flags, s32 player) override {
         hits.push_back({id, power, flags, player});
@@ -123,8 +123,9 @@ struct Fixture {
         ref.realmId = -1;
         ref.realm = "Legends";
         ref.name = "native-targets";
-        REQUIRE(world.loadImported(device, root, ref, std::move(layout), std::move(collision),
-                                   imported));
+        const bool loaded = world.loadImported(device, root, ref, std::move(layout),
+                                               std::move(collision), imported);
+        REQUIRE(loaded);
         arsenal.bind({device, classes, weapons, world.collision(), effects, audio, nullptr, {}});
         attacks.bind({device, classes, world, weapons, effects, audio, nullptr, arsenal, dimmer});
         fixtures.bind({device, world, weapons, effects, audio});
@@ -204,9 +205,9 @@ TEST_CASE("Imported fixtures share turbo and item-area dispatch",
 TEST_CASE("A real player missile flight reaches imported barrels before inert stops",
           "[legends][imported-targets][assets]") {
     Fixture f;
-    static constexpr MissileSpec spec{"TEST", {}, .1f, 0, 0, true};
+    static constexpr MissileSpec kSpec{"TEST", {}, .1f, 0, 0, true};
     MissileLaunch shot;
-    shot.spec = &spec;
+    shot.spec = &kSpec;
     shot.owner = 3;
     shot.position = {0, .5f, -5};
     shot.velocity = Vec3{0, 0, 30};

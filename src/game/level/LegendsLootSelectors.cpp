@@ -23,7 +23,7 @@ std::string fourcc(std::span<const u8> bytes, usize at) {
     if (readU32BE(bytes, at) == 0) {
         return {};
     }
-    return std::string(reinterpret_cast<const char*>(bytes.data() + at), 4);
+    return {std::bit_cast<const char*>(bytes.data() + at), 4};
 }
 } // namespace
 

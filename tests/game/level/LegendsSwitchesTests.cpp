@@ -66,7 +66,7 @@ TEST_CASE("Native breakaway descends without returning and shares target initial
     CHECK(motion.targets()[0].offset == -6);
     CHECK_FALSE(motion.targets()[0].moving);
     plate.secondEndpoint = 0;
-    LegendsSwitches defaultDrop{std::array{plate}};
+    const LegendsSwitches defaultDrop{std::array{plate}};
     CHECK(defaultDrop.targets()[0].second == -50);
 
     auto second = plate;

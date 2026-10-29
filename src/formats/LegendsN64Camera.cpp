@@ -36,9 +36,10 @@ LegendsN64CameraData decodeLegendsN64Camera(std::span<const u8> settings,
     for (usize i = 0; i < count; ++i) {
         const usize at = offset + i * 8;
         LegendsN64CameraMarker marker;
-        for (usize axis = 0; axis < 3; ++axis) {
-            marker.position[axis] =
-                static_cast<f32>(static_cast<s16>(readU16BE(settings, at + axis * 2))) / 4;
+        for (s32 axis = 0; axis < 3; ++axis) {
+            marker.position[axis] = static_cast<f32>(static_cast<s16>(
+                                        readU16BE(settings, at + static_cast<usize>(axis) * 2))) /
+                                    4;
         }
         marker.yaw = static_cast<f32>(static_cast<s8>(settings[at + 6])) / 40.743664f;
         marker.pitch = static_cast<f32>(static_cast<s8>(settings[at + 7])) / 81.48733f;
@@ -48,22 +49,23 @@ LegendsN64CameraData decodeLegendsN64Camera(std::span<const u8> settings,
     if (result.tower) {
         // e0869a6c projects the tower target onto the nearest entry in this
         // native realm-return table. The five directions are NOT IST markers.
-        constexpr usize table = 0xe006eedcU - 0xe0000400U;
-        constexpr std::array<u32, 5> realms{0, 3, 7, 6, 12};
-        range(program, table, (realms.size() + 1) * 16);
-        for (usize i = 0; i < realms.size(); ++i) {
-            const usize at = table + i * 16;
-            require(readU32BE(program, at) == realms[i], "unsupported tower return table");
+        constexpr usize kTable = 0xe006eedcU - 0xe0000400U;
+        constexpr std::array<u32, 5> kRealms{0, 3, 7, 6, 12};
+        range(program, kTable, (kRealms.size() + 1) * 16);
+        for (usize i = 0; i < kRealms.size(); ++i) {
+            const usize at = kTable + i * 16;
+            require(readU32BE(program, at) == kRealms[i], "unsupported tower return table");
             Vec3 point;
-            for (usize axis = 0; axis < 3; ++axis) {
-                point[axis] = std::bit_cast<f32>(readU32BE(program, at + 4 + axis * 4));
+            for (s32 axis = 0; axis < 3; ++axis) {
+                point[axis] =
+                    std::bit_cast<f32>(readU32BE(program, at + 4 + static_cast<usize>(axis) * 4));
                 require(std::isfinite(point[axis]) && std::abs(point[axis]) <= 100000,
                         "invalid tower return point");
             }
             require(point.x * point.x + point.z * point.z > .0001f, "zero tower return direction");
             result.towerExits.push_back(point);
         }
-        require(readU32BE(program, table + realms.size() * 16) == 16,
+        require(readU32BE(program, kTable + kRealms.size() * 16) == 16,
                 "unterminated tower return table");
     }
     return result;

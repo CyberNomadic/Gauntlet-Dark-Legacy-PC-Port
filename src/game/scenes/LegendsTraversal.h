@@ -23,7 +23,7 @@ public:
     /** Throws FormatError if no safe starting floor can be found. */
     void open(const formats::LegendsMap& map, s32 player, const CharacterSave& save,
               const ClassStats* stats = nullptr);
-    void step(const MoveInput& move, f32 cameraYaw, f32 seconds,
+    void step(const MoveInput& input, f32 cameraYaw, f32 seconds,
               const std::optional<Vec3>& aim = {}, bool freeMove = false);
     /** Revalidates a scenery-adjusted horizontal step through the same native
      * player movement queries. `before` is the actor copied immediately before

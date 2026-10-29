@@ -218,7 +218,8 @@ TEST_CASE("Native damaging traps bind artwork and attachments across admitted pa
     const auto catalog = legendsMaps(LegendsPlatform::N64, assets, {}, {});
     REQUIRE(catalog.size() == 34);
     const auto templates = readFile(root / "items/generic/ptrap.rom");
-    usize decodedCount = 0, loadedRosters = 0;
+    usize decodedCount = 0;
+    usize loadedRosters = 0;
     for (const auto& entry : catalog) {
         CAPTURE(entry.name);
         const auto decoded =

@@ -63,7 +63,7 @@ TEST_CASE("All native Legends boss arenas open through the common opponent owner
     const auto root = test::assetOrSkip("CRITTER").parent_path();
     const auto program = readFile(nativeRoot / "_program/game.bin");
     const auto overlay = readFile(nativeRoot / "_program/Boss.bin");
-    for (const auto name : {"mount6", "ice5", "town5", "castle5", "boss2", "hell2"}) {
+    for (const char* const name : {"mount6", "ice5", "town5", "castle5", "boss2", "hell2"}) {
         DYNAMIC_SECTION(name) {
             const auto encounter = legendsN64Boss(name, program, overlay);
             REQUIRE(encounter);
@@ -138,11 +138,11 @@ TEST_CASE("All native Legends boss arenas open through the common opponent owner
             events.activateArena = [&](const CombatArenaActivation& action) {
                 imported->activateArena(action);
             };
-            constexpr f32 step = 1.0f / 60;
+            constexpr f32 kStep = 1.0f / 60;
             for (s32 frame = 0; frame < 360; ++frame) {
                 REQUIRE(opponents.bosses().position());
                 players[0].actor.place(*opponents.bosses().position() + Vec3{0, 0, 10});
-                opponents.update(1, step, players, {}, events);
+                opponents.update(1, kStep, players, {}, events);
             }
             REQUIRE(opponents.bosses().view().awake);
             REQUIRE_FALSE(opponents.bosses().targets().empty());
@@ -151,7 +151,7 @@ TEST_CASE("All native Legends boss arenas open through the common opponent owner
                 opponents.bosses().hurt(hit);
                 damaged = opponents.bosses().view().health < initial;
                 if (!damaged) {
-                    opponents.update(1, step, players, {}, events);
+                    opponents.update(1, kStep, players, {}, events);
                 }
             }
             CHECK(damaged);
@@ -187,14 +187,14 @@ TEST_CASE("All native Legends boss arenas open through the common opponent owner
                 if (opponents.bosses().view().alive) {
                     opponents.bosses().hurt(hit);
                 }
-                imported->update(step, false);
-                opponents.update(1, step, players, {}, events);
+                imported->update(kStep, false);
+                opponents.update(1, kStep, players, {}, events);
             }
             REQUIRE(victories == 1);
             CHECK_FALSE(opponents.bosses().present());
             CHECK_FALSE(imported->travelRequested());
             for (s32 frame = 0; frame < 3; ++frame) {
-                opponents.update(1, step, players, {}, events);
+                opponents.update(1, kStep, players, {}, events);
             }
             CHECK(victories == 1);
             const auto released = scriptRewards();
@@ -219,18 +219,18 @@ TEST_CASE("All native Legends boss arenas open through the common opponent owner
                 party[0].save.progress().legendsProgress(LegendsPlatform::N64).hasCompleted(name));
             const s32 waitFrames = static_cast<s32>(std::ceil(encounter->departureSeconds * 60));
             for (s32 frame = 0; frame < waitFrames - 1; ++frame) {
-                imported->update(step, false);
+                imported->update(kStep, false);
             }
             CHECK_FALSE(imported->travelRequested());
             for (s32 frame = 0; frame < 2; ++frame) {
-                imported->update(step, false);
+                imported->update(kStep, false);
             }
             REQUIRE(imported->destination());
             CHECK(*imported->destination() == "tower2");
             REQUIRE(imported->departure());
             CHECK_FALSE(imported->departure()->finished);
             for (s32 frame = 0; frame < 121; ++frame) {
-                imported->update(step, false);
+                imported->update(kStep, false);
             }
             REQUIRE(imported->departure()->finished);
             party[0].save = players[0].actor.save();

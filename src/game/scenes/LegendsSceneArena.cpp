@@ -68,7 +68,7 @@ void LegendsSceneAdapter::bindN64Arena(RenderDevice& device, const ImportedBoss&
             binding.figures[tier] = bind(std::format("L{}", tier), tier != 0);
         }
         binding.burstFigure = bind("EXP", false);
-        m_arenaRocks.push_back(std::move(binding));
+        m_arenaRocks.push_back(binding);
         selectArenaRock(m_arenaRocks.size() - 1);
     }
 }
@@ -87,7 +87,7 @@ void LegendsSceneAdapter::selectArenaRock(usize index, bool burst) {
     if (rock.activeFigure) {
         auto& figure = m_fixtures[*rock.activeFigure];
         const auto* sequence = figure.sequenceInfo(0);
-        figure.play(0, !burst && sequence && sequence->repeats);
+        figure.play(0, !burst && sequence != nullptr && sequence->repeats);
         figure.capturePresentation();
         m_hiddenFixtures[*rock.activeFigure] = false;
     }
@@ -157,6 +157,7 @@ std::vector<CombatArenaTarget> LegendsSceneAdapter::arenaTargets() const {
 
 std::vector<Mat4> LegendsSceneAdapter::arenaAnchors() const {
     std::vector<Mat4> result;
+    result.reserve(m_arenaRocks.size());
     for (const auto& rock : m_arenaRocks) {
         result.push_back(itemPlacement(rock.definition.position, Vec3{0, rock.definition.yaw, 0}));
     }
@@ -188,13 +189,10 @@ std::vector<MissileStop> LegendsSceneAdapter::arenaMissileStops() const {
 }
 
 bool LegendsSceneAdapter::arenaBlocksSegment(const Vec3& from, const Vec3& to, f32 radius) const {
-    for (const auto& rock : m_arenaRocks) {
-        if (!rock.dormant && rock.health > 0 &&
-            arenaBody(rock.definition).blocksSegment(from, to, radius)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(m_arenaRocks, [&](const auto& rock) {
+        return !rock.dormant && rock.health > 0 &&
+               arenaBody(rock.definition).blocksSegment(from, to, radius);
+    });
 }
 
 } // namespace gdl::game

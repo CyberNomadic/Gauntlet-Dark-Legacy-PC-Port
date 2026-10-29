@@ -33,9 +33,9 @@ using namespace gdl::game;
 class PickupImportedLevel final : public ImportedLevel {
 public:
     void capturePresentation() override {}
-    void update(f32, bool) override {}
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
-    }
+    void update(f32 /*seconds*/, bool /*timeStopped*/) override {}
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {}
 };
 
 TEST_CASE("completed imported pickups use common feedback without granting rewards twice",
@@ -53,9 +53,10 @@ TEST_CASE("completed imported pickups use common feedback without granting rewar
     floor.objectFlags = 4;
     collision.build({floor});
     REQUIRE(collision.loaded());
-    REQUIRE(world.loadImported(device, root, LevelRef{},
-                               WorldLayout::fromDecoded({}, {}, {-20, 0, -20}, {20, 20, 20}),
-                               std::move(collision), std::make_shared<PickupImportedLevel>()));
+    const bool loaded = world.loadImported(
+        device, root, LevelRef{}, WorldLayout::fromDecoded({}, {}, {-20, 0, -20}, {20, 20, 20}),
+        std::move(collision), std::make_shared<PickupImportedLevel>());
+    REQUIRE(loaded);
     REQUIRE(world.imported());
     REQUIRE_FALSE(world.isTower());
     const std::array<test::NativeSoundSample, 1> samples{{{48000, std::vector<s16>(4800, 1000)}}};
@@ -295,8 +296,8 @@ TEST_CASE("a Turbo pickup is stored, not spent, while the meter is all but full"
           "[pickups][turbo-activation]") {
     // Auto-Use would fill a meter that is already full: the pickup waits for the selector.
     CHECK_FALSE(PartyPickups::storesTurbo(0.0f));
-    CHECK_FALSE(PartyPickups::storesTurbo(TurboMeter::kFull * PartyPickups::kTurboStoreShare -
-                                          1.0f));
+    CHECK_FALSE(
+        PartyPickups::storesTurbo(TurboMeter::kFull * PartyPickups::kTurboStoreShare - 1.0f));
     CHECK(PartyPickups::storesTurbo(TurboMeter::kFull * PartyPickups::kTurboStoreShare));
     CHECK(PartyPickups::storesTurbo(TurboMeter::kFull));
 }

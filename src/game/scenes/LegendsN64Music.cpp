@@ -19,7 +19,7 @@ std::optional<u16> legendsN64SongForLevel(std::string_view directoryName) {
     // Ice2 uses Dungeon, Ice5/6 Mount5, and Town4 uses Townt4, not Town4.
     // These are ordinary-level defaults. Native Tower progression can override
     // its song during a cinematic; the exploratory map viewer has no cinematics.
-    static constexpr std::array<std::pair<std::string_view, u16>, 35> routes{{
+    static constexpr std::array<std::pair<std::string_view, u16>, 35> kRoutes{{
         {"castle1", 6},  {"castle6", 7},  {"castle3", 8},  {"castle4", 9},  {"castle5", 10},
         {"mount1", 0},   {"mount2", 1},   {"mount3", 2},   {"mount4", 3},   {"mount5", 4},
         {"mount6", 5},   {"ice1", 19},    {"ice2", 7},     {"ice3", 26},    {"ice4", 29},
@@ -28,7 +28,7 @@ std::optional<u16> legendsN64SongForLevel(std::string_view directoryName) {
         {"town4", 18},   {"town5", 33},   {"battle1", 22}, {"battle2", 24}, {"battle3", 25},
         {"hell1", 31},   {"hell2", 32},   {"boss1", 28},   {"boss2", 21},   {"tower2", 17},
     }};
-    for (const auto& [name, song] : routes) {
+    for (const auto& [name, song] : kRoutes) {
         if (nameKey == name) {
             return song;
         }

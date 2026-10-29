@@ -196,9 +196,10 @@ std::vector<LegendsN64Portal> decodeLegendsN64Portals(std::span<const u8> placem
                            : legendsN64ExitDestination(program, portal.destination, sourceMap)) {
             portal.map = std::move(*map);
         }
-        for (usize axis = 0; axis < 3; ++axis) {
-            portal.position[axis] =
-                static_cast<f32>(static_cast<s16>(readU16BE(placements, at + axis * 2))) / 4;
+        for (s32 axis = 0; axis < 3; ++axis) {
+            portal.position[axis] = static_cast<f32>(static_cast<s16>(
+                                        readU16BE(placements, at + static_cast<usize>(axis) * 2))) /
+                                    4;
         }
         portal.yaw = static_cast<f32>(static_cast<s16>(readU16BE(placements, at + 6))) / 32;
         portal.scale = std::bit_cast<f32>(readU32BE(placements, at + 16));

@@ -57,7 +57,7 @@ TEST_CASE("native boss rewards are prebound hidden and released once without GPU
     const auto root = rootOrSkip();
     const auto program = readFile(root / "_program/game.bin");
     const auto overlay = readFile(root / "_program/Boss.bin");
-    for (const auto name : {"mount6", "ice5", "town5", "castle5", "boss2", "hell2"}) {
+    for (const char* const name : {"mount6", "ice5", "town5", "castle5", "boss2", "hell2"}) {
         CAPTURE(name);
         const auto encounter = legendsN64Boss(name, program, overlay);
         REQUIRE(encounter);
@@ -99,7 +99,7 @@ TEST_CASE("native boss rewards are prebound hidden and released once without GPU
         }
         CHECK(device.texturesCreated == textures);
         LegendsTraversal traversal;
-        CharacterSave save;
+        const CharacterSave save;
         traversal.open(map, 0, save);
         for (s32 frame = 0; frame < 360; ++frame) {
             scene->updateBossRewards(1.0f / 60.0f, traversal.collision());
@@ -121,7 +121,7 @@ TEST_CASE("native boss rewards are prebound hidden and released once without GPU
 TEST_CASE("native boss drops use ordinary physical collection and share shards only",
           "[legends][bosses][boss-rewards][assets]") {
     const auto root = rootOrSkip();
-    for (const auto name : {"mount6", "boss2"}) {
+    for (const char* const name : {"mount6", "boss2"}) {
         CAPTURE(name);
         auto map = mapAt(root / "levels" / name);
         test::FakeRenderDevice device;
@@ -131,7 +131,7 @@ TEST_CASE("native boss drops use ordinary physical collection and share shards o
         REQUIRE_FALSE(indices.empty());
         PlayerActor first;
         PlayerActor second;
-        CharacterSave initial;
+        const CharacterSave initial;
         first.spawn(0, initial, nullptr, {10000, 10000, 10000}, 0);
         second.spawn(1, initial, nullptr, {10000, 10000, 10000}, 0);
         const auto gdlBefore = first.save().progress().relics;

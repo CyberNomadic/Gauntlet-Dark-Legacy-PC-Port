@@ -695,7 +695,8 @@ void LevelOpponents::open(const Resources& resources, std::span<const PlayerRunt
         gargoyle != roster.end() ? std::string_view(gargoyle->form) : std::string_view{};
     const std::array creatureTextures{&world.textures()};
     char creatureRealm = levelName.empty() ? 'G' : levelName.front();
-    if (const auto* imported = world.imported(); imported && !imported->importedActors().empty()) {
+    if (const auto* imported = world.imported();
+        imported != nullptr && !imported->importedActors().empty()) {
         creatureRealm = imported->importedActors().front().costumeRealm;
     }
     m_critters.open(device, resources.root, &world.collision(), scales, creatureRealm,
@@ -932,10 +933,10 @@ void LevelOpponents::shrinkOpponents(std::span<const PlayerRuntime> players) {
         return;
     }
     const LevelInfo* level = m_resources->world.level();
-    const f32 scale =
-        PlayerPowerups::enemyShrink(players, (level != nullptr && level->bossType >= 0) ||
-                                                 (m_resources->world.imported() &&
-                                                  m_resources->world.imported()->importedBoss()));
+    const f32 scale = PlayerPowerups::enemyShrink(
+        players, (level != nullptr && level->bossType >= 0) ||
+                     (m_resources->world.imported() != nullptr &&
+                      m_resources->world.imported()->importedBoss() != nullptr));
     if (EnemyShrink::rises(m_sim.shrink, scale)) {
         m_resources->audio.playNamed(EnemyShrink::kUnshrinkSound);
     }

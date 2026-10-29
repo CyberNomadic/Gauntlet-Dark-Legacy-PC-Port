@@ -40,7 +40,7 @@ public:
     LegendsSceneAdapter* adapter() { return m_adapter.get(); }
     const LegendsSceneAdapter* adapter() const { return m_adapter.get(); }
     /** Native geometry in the ordinary gameplay render phases; no camera, player or HUD. */
-    void drawWorld(RenderDevice& device, const Mat4& clip, const WorldCamera& camera,
+    void drawWorld(RenderDevice& device, const Mat4& transform, const WorldCamera& view,
                    TreeModel::Pass pass, f32 presentationAlpha) const;
     void update(const Input& input, f32 seconds, bool consoleCapturesInput);
     void updatePlayable(const Input& input, f32 seconds, bool consoleCapturesInput,

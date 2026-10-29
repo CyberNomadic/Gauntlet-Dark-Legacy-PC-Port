@@ -50,19 +50,19 @@ public:
         native.pitch = .6f;
     }
     void capturePresentation() override {}
-    void update(f32 seconds, bool) override {
+    void update(f32 seconds, bool /*timeStopped*/) override {
         ++animationUpdates;
         animationSeconds += seconds;
     }
-    void draw(RenderDevice&, const Mat4&, const WorldCamera& view, TreeModel::Pass,
-              f32) const override {
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& view,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {
         drawnCameras.push_back(view);
     }
     void resetCamera(std::span<const CameraSubject> input) override {
         ++resets;
         subjects.assign(input.begin(), input.end());
     }
-    void followCamera(std::span<const CameraSubject> input, f32) override {
+    void followCamera(std::span<const CameraSubject> input, f32 /*seconds*/) override {
         ++follows;
         subjects.assign(input.begin(), input.end());
     }
@@ -75,10 +75,11 @@ public:
         return result;
     }
     std::optional<Vec3> cameraAttention() const override { return attention; }
-    Vec3 resolveMovement(const Vec3& from, const Vec3& to, f32, f32) const override {
+    Vec3 resolveMovement(const Vec3& from, const Vec3& to, f32 /*radius*/,
+                         f32 /*height*/) const override {
         return block && to.x > from.x ? Vec3{from.x, to.y, to.z} : to;
     }
-    void updateParty(std::span<PlayerActor*> actors, f32, bool activateItems) override {
+    void updateParty(std::span<PlayerActor*> actors, f32 /*seconds*/, bool activateItems) override {
         ++partyUpdates;
         activate = activateItems;
         visitors = actors.size();
@@ -91,8 +92,8 @@ public:
     }
     std::vector<ImportedPickup> takePickups() override { return std::exchange(pickups, {}); }
     std::vector<ImportedHazardHit> takeHazardHits() override { return std::exchange(hazards, {}); }
-    void watch(const ViewVolume&) override { ++watches; }
-    void playSounds(SoundPlayer&, const Vec3&) override { ++soundServices; }
+    void watch(const ViewVolume& /*view*/) override { ++watches; }
+    void playSounds(SoundPlayer& /*player*/, const Vec3& /*listener*/) override { ++soundServices; }
     void pauseSounds() override { ++soundPauses; }
     void stopSounds() override { ++soundStops; }
     bool travelRequested() const override { return travel; }
@@ -118,8 +119,9 @@ TEST_CASE("Imported maps retain ordinary gameplay while supplying native camera 
          {{0, 1, 0}, {Vec3{100, 0, -100}, Vec3{-100, 0, 100}, Vec3{100, 0, 100}}, 0, 4}});
     auto layout = WorldLayout::fromDecoded(
         {}, {{.kind = LocatorKind::Start, .position = {0, 0, 0}}}, {-100, 0, -100}, {100, 40, 100});
-    REQUIRE(
-        world.loadImported(device, root, ref, std::move(layout), std::move(collision), imported));
+    const bool loaded =
+        world.loadImported(device, root, ref, std::move(layout), std::move(collision), imported);
+    REQUIRE(loaded);
     GameContext context;
     context.config = &config;
     context.strings = &strings;

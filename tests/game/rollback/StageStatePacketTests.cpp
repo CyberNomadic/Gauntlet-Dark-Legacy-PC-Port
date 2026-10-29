@@ -144,7 +144,13 @@ Packet::State populatedState() {
     world.core.hidden = {100};
     world.core.contactOnly = {1};
     world.core.blockedFloorExits = {100};
-    world.core.animations.push_back({0, 10, 3.25f, true, true, false, false, false});
+    world.core.animations.push_back({.object = 0,
+                                     .frames = 10,
+                                     .seam = 0.5f,
+                                     .frame = 3.25f,
+                                     .reverse = true,
+                                     .once = true,
+                                     .presentationCut = false});
     world.core.cycles.push_back({0, true});
     world.core.light.points.push_back({{1, 2, 3}, {0.2f, 0.3f, 0.4f}, 5, 2});
     world.core.textureFrame = 23;

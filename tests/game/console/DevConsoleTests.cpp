@@ -17,8 +17,8 @@
 
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
-#include "game/console/DevConsole.h"
 #include "game/config/GameConfig.h"
+#include "game/console/DevConsole.h"
 
 namespace {
 using namespace gdl;
@@ -37,9 +37,8 @@ TEST_CASE("console policy hides host commands and prevents their handlers runnin
                        [&](DevConsole&, DevConsole::Arguments) { ++calls; });
     console.setPolicy([&](std::string_view name) { return host || name != "console_permissions"; });
     console.run("help");
-    REQUIRE(std::ranges::none_of(console.output(), [](const auto& line) {
-        return line.contains("host-only switch");
-    }));
+    REQUIRE(std::ranges::none_of(
+        console.output(), [](const auto& line) { return line.contains("host-only switch"); }));
     console.run("CONSOLE_PERMISSIONS 1");
     REQUIRE(calls == 0);
     host = true;
@@ -52,9 +51,8 @@ TEST_CASE("console dispatch routes expanded commands without mutating the local 
     DevConsole console;
     s32 localCalls = 0;
     std::string received;
-    console.addCommand("get", "give an item", [&](DevConsole&, DevConsole::Arguments) {
-        ++localCalls;
-    });
+    console.addCommand("get", "give an item",
+                       [&](DevConsole&, DevConsole::Arguments) { ++localCalls; });
     console.setVariable("ITEM", "gold");
     console.setPolicy({}, [&](DevConsole&, std::string_view name, DevConsole::Arguments args) {
         REQUIRE(name == "get");
@@ -524,8 +522,7 @@ TEST_CASE("the screen is the status strip's width, black, and hangs above the vi
     CHECK(down.bottom == Approx(192.0f));
 }
 
-TEST_CASE("the pointer moving over the screen sees through it until it leaves",
-          "[dev-console]") {
+TEST_CASE("the pointer moving over the screen sees through it until it leaves", "[dev-console]") {
     DevConsole console;
     const Input input;
     test::FakeRenderDevice device;
@@ -639,20 +636,21 @@ TEST_CASE("a line's $words stand for the console's variables, or the line is ref
     CHECK_FALSE(console.variable("SELECTED").has_value());
 }
 
-
 /** A command object of the test's own, counting what it was run with. */
 class CountingCommand final : public ConsoleCommand {
 public:
     explicit CountingCommand(std::string name) : m_name(std::move(name)) {}
     std::string_view name() const override { return m_name; }
     std::string_view summary() const override { return "counts its arguments"; }
-    void run(DevConsole&, Arguments arguments) override {
+    void run(DevConsole& /*console*/, Arguments arguments) override {
         runs += 1;
-        arguments_ = static_cast<s32>(arguments.size());
+        argumentCount = static_cast<s32>(arguments.size());
     }
-    std::vector<std::string> completions(Arguments) const override { return {"one", "two"}; }
+    std::vector<std::string> completions(Arguments /*arguments*/) const override {
+        return {"one", "two"};
+    }
     s32 runs = 0;
-    s32 arguments_ = -1;
+    s32 argumentCount = -1;
 
 private:
     std::string m_name;
@@ -668,7 +666,7 @@ TEST_CASE("command objects register into the console and are found by name in an
     console.addCommand(std::move(owned));
     console.run("SPIN a b");
     CHECK(spin->runs == 1);
-    CHECK(spin->arguments_ == 2);
+    CHECK(spin->argumentCount == 2);
     CHECK(commands.find("spin") == spin);
     CHECK(commands.find("spinner") == nullptr);
     CHECK(commands.completeName("sp") == "Spin");
@@ -693,8 +691,9 @@ TEST_CASE("the console suggests the rest of a word and Right at the end of the l
     Input input;
     console.addCommand("goto", "travels", [](DevConsole&, DevConsole::Arguments) {});
     console.addCommand("get", "gives", [](DevConsole&, DevConsole::Arguments) {});
-    console.addCommand("list", "names", [](DevConsole&, DevConsole::Arguments) {},
-                       wordsCompleter({"maps", "items"}));
+    console.addCommand(
+        "list", "names", [](DevConsole&, DevConsole::Arguments) {},
+        wordsCompleter({"maps", "items"}));
     press(console, input, Key::Grave);
     REQUIRE(console.open());
     CHECK(console.suggestion().empty());

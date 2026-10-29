@@ -54,7 +54,7 @@ void LevelOpponents::openImportedActors() {
                 continue;
             }
             if (const auto* audio = data.audio(level.audioIndex);
-                audio && !audio->bank.empty() &&
+                audio != nullptr && !audio->bank.empty() &&
                 resources.audio.borrowBank(resources.root / "audio" / audio->bank)) {
                 return;
             }

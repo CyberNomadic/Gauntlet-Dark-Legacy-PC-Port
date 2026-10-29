@@ -263,7 +263,7 @@ TEST_CASE("Legends walking renders the selected native character and holds input
     Input input;
     input.beginPoll();
     input.setKey(Key::W, true);
-    GameConfig config;
+    const GameConfig config;
     preview.updatePlayable(input, 0.1f, true, config);
     CHECK(preview.traversal()->actor().position() == initial);
     for (s32 frame = 0; frame < 60; ++frame) {

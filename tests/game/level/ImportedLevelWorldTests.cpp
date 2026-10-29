@@ -24,8 +24,8 @@ public:
 
     void capturePresentation() override { ++captures; }
     void update(f32 seconds, bool stopped) override { updates.emplace_back(seconds, stopped); }
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass pass,
-              f32 alpha) const override {
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass pass, f32 alpha) const override {
         passes.push_back(pass);
         alphas.push_back(alpha);
     }
@@ -114,7 +114,7 @@ TEST_CASE("Imported levels enter the ordinary world pipeline with isolated commo
     CHECK_FALSE(world.canRestoreLocal(saved));
     CHECK_FALSE(world.restoreLocal(saved));
 
-    std::weak_ptr<ImportedPresentation> lifetime = imported;
+    const std::weak_ptr<ImportedPresentation> lifetime = imported;
     imported.reset();
     CHECK_FALSE(lifetime.expired());
     world.clear();

@@ -8,7 +8,6 @@
 
 namespace {
 using namespace gdl;
-using Catch::Approx;
 
 TEST_CASE("render limits never exceed the active monitor even with V-Sync disabled",
           "[platform][display][graphics]") {

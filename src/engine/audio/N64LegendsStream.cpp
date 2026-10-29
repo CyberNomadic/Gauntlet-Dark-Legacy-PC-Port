@@ -85,7 +85,7 @@ constexpr std::array<NativeFile, 39> kSongs{{
 
 std::vector<u8> readVerified(const std::filesystem::path& root, const NativeFile& file) {
     FileStream source(root / file.name);
-    if (source.size() == 0 || source.size() > 4 * 1024 * 1024) {
+    if (source.size() == 0 || source.size() > u64{4} * 1024 * 1024) {
         throw FormatError("unsupported N64 audio file length");
     }
     auto data = source.readExact(static_cast<usize>(source.size()));
@@ -135,6 +135,8 @@ struct NamesScope {
         &amuse::SoundMacroId::CurNameDB, &amuse::SampleId::CurNameDB, &amuse::TableId::CurNameDB,
         &amuse::KeymapId::CurNameDB,     &amuse::LayersId::CurNameDB};
     std::array<amuse::NameDB*, 8> saved{};
+    NamesScope(const NamesScope&) = delete;
+    NamesScope& operator=(const NamesScope&) = delete;
     explicit NamesScope(const amuse::ProjectDatabase& names) {
         for (usize i = 0; i < slots.size(); ++i) {
             saved[i] = *slots[i];
@@ -162,8 +164,10 @@ struct Mix final : amuse::IBackendSubmix {
     Mix(Backend& owner, amuse::Submix& source, bool main, s32 identity)
         : parent(owner), client(source), mainOut(main), bus(identity) {}
     ~Mix() override;
-    void setSendLevel(amuse::IBackendSubmix* target, float value, bool) override {
-        send = static_cast<Mix*>(target);
+    Mix(const Mix&) = delete;
+    Mix& operator=(const Mix&) = delete;
+    void setSendLevel(amuse::IBackendSubmix* target, float value, bool /*slew*/) override {
+        send = dynamic_cast<Mix*>(target);
         sendLevel = value;
     }
     double getSampleRate() const override { return kRate; }
@@ -184,6 +188,8 @@ struct Voice final : amuse::IBackendVoice {
     Voice(Backend& owner, amuse::Voice& source, f64 frequency, u64 serial)
         : parent(owner), client(source), identity(serial), rate(frequency) {}
     ~Voice() override;
+    Voice(const Voice&) = delete;
+    Voice& operator=(const Voice&) = delete;
     void resetSampleRate(double value) override {
         rate = value;
         cache.clear();
@@ -191,7 +197,7 @@ struct Voice final : amuse::IBackendVoice {
     }
     void resetChannelLevels() override { routes.clear(); }
     void setChannelLevels(amuse::IBackendSubmix* mix, const std::array<float, 8>& levels,
-                          bool) override {
+                          bool /*slew*/) override {
         for (auto& route : routes) {
             if (route.first == mix) {
                 route.second = levels;
@@ -201,9 +207,9 @@ struct Voice final : amuse::IBackendVoice {
         if (routes.size() >= 3) {
             throw FormatError("N64 music exceeded its three native audio buses");
         }
-        routes.emplace_back(static_cast<Mix*>(mix), levels);
+        routes.emplace_back(dynamic_cast<Mix*>(mix), levels);
     }
-    void setPitchRatio(double value, bool) override { ratio = value; }
+    void setPitchRatio(double value, bool /*slew*/) override { ratio = value; }
     void start() override { playing = true; }
     void stop() override { playing = false; }
     void pump();
@@ -218,7 +224,7 @@ struct Backend final : amuse::IBackendVoiceAllocator {
     u64 nextVoice = 1;
 
     std::unique_ptr<amuse::IBackendVoice> allocateVoice(amuse::Voice& source, double rate,
-                                                        bool) override {
+                                                        bool /*dynamicPitch*/) override {
         if (voices.size() >= 256) {
             throw FormatError("N64 music exceeded its voice budget");
         }
@@ -236,7 +242,9 @@ struct Backend final : amuse::IBackendVoiceAllocator {
         return result;
     }
     std::vector<std::pair<std::string, std::string>> enumerateMIDIDevices() override { return {}; }
-    std::unique_ptr<amuse::IMIDIReader> allocateMIDIReader(amuse::Engine&) override { return {}; }
+    std::unique_ptr<amuse::IMIDIReader> allocateMIDIReader(amuse::Engine& /*engine*/) override {
+        return {};
+    }
     amuse::AudioChannelSet getAvailableSet() override { return amuse::AudioChannelSet::Stereo; }
     void setVolume(float value) override { volume = value; }
     void setCallbackInterface(amuse::Engine* value) override { engine = value; }
@@ -334,7 +342,8 @@ void Voice::pump() {
     if (cache.size() < needed) {
         const usize begin = cache.size();
         cache.resize(needed);
-        const usize supplied = client.supplyAudio(needed - begin, cache.data() + begin);
+        const usize supplied =
+            client.supplyAudio(needed - begin, std::span{cache}.subspan(begin).data());
         if (supplied > needed - begin) {
             throw FormatError("N64 music supplied too many voice samples");
         }
@@ -343,13 +352,15 @@ void Voice::pump() {
     std::array<f32, kFrames> input{};
     std::array<f32, kFrames> routed{};
     for (usize i = 0; i < kFrames; ++i) {
-        const usize index = static_cast<usize>(phase);
-        const f32 fraction = static_cast<f32>(phase - index);
-        input[i] = (cache[index] * (1.0f - fraction) + cache[index + 1] * fraction) / 32768.0f;
+        const auto index = static_cast<usize>(phase);
+        const auto fraction = static_cast<f32>(phase - static_cast<f64>(index));
+        input[i] = (static_cast<f32>(cache[index]) * (1.0f - fraction) +
+                    static_cast<f32>(cache[index + 1]) * fraction) /
+                   32768.0f;
         phase += step;
     }
-    const usize consumed = static_cast<usize>(phase);
-    phase -= consumed;
+    const auto consumed = static_cast<usize>(phase);
+    phase -= static_cast<f64>(consumed);
     cache.erase(cache.begin(), cache.begin() + static_cast<std::ptrdiff_t>(consumed));
     for (const auto& [mix, gains] : routes) {
         client.routeAudio(kFrames, kInterval, mix->bus, input.data(), routed.data());
@@ -368,9 +379,11 @@ public:
         start();
     }
     ~NativeEffect() override {
-        NamesScope scope(m_names);
+        const NamesScope scope(m_names);
         m_engine.reset();
     }
+    NativeEffect(const NativeEffect&) = delete;
+    NativeEffect& operator=(const NativeEffect&) = delete;
     AudioStreamDesc desc() const override { return {32000, 2}; }
     bool read(std::vector<f32>& out, usize frames) override {
         if (!m_engine || frames == 0) {
@@ -378,7 +391,7 @@ public:
         }
         const usize begin = out.size();
         try {
-            NamesScope scope(m_names);
+            const NamesScope scope(m_names);
             const usize count = std::min<usize>(frames, 32768);
             out.reserve(out.size() + count * 2);
             for (usize i = 0; i < count; ++i) {
@@ -405,7 +418,7 @@ public:
             }
         } catch (const std::exception& error) {
             log::warn("N64 effect {} stopped: {}", m_cue, error.what());
-            NamesScope scope(m_names);
+            const NamesScope scope(m_names);
             m_engine.reset();
         }
         return out.size() != begin;
@@ -415,14 +428,14 @@ public:
             start();
         } catch (const std::exception& error) {
             log::warn("N64 effect {} rewind failed: {}", m_cue, error.what());
-            NamesScope scope(m_names);
+            const NamesScope scope(m_names);
             m_engine.reset();
         }
     }
 
 private:
     void start() {
-        NamesScope scope(m_names);
+        const NamesScope scope(m_names);
         m_engine.reset();
         m_engine = std::make_unique<amuse::Engine>(m_backend);
         m_engine->addAudioGroup(*m_bank->group);
@@ -460,14 +473,17 @@ struct N64LegendsStream::Impl {
     std::array<f32, kFrames * 2> pending{};
     usize pendingFrame = kFrames;
 
+    Impl() = default;
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
     ~Impl() {
-        NamesScope scope(names);
+        const NamesScope scope(names);
         sequence.reset();
         engine.reset();
     }
 
     void start() {
-        NamesScope scope(names);
+        const NamesScope scope(names);
         sequence.reset();
         engine.reset();
         engine = std::make_unique<amuse::Engine>(backend);
@@ -519,7 +535,7 @@ bool N64LegendsStream::read(std::vector<f32>& out, usize frames) {
         return false;
     }
     try {
-        NamesScope scope(m_impl->names);
+        const NamesScope scope(m_impl->names);
         const usize count = std::min<usize>(frames, 32768);
         out.reserve(out.size() + count * 2);
         for (usize i = 0; i < count; ++i) {
@@ -566,8 +582,8 @@ bool N64LegendsEffects::open(const std::filesystem::path& root) {
     try {
         auto result = std::make_unique<Impl>();
         result->bank = std::make_shared<NativeBank>(root);
-        amuse::ProjectDatabase names;
-        NamesScope scope(names);
+        const amuse::ProjectDatabase names{};
+        const NamesScope scope(names);
         const auto project =
             amuse::AudioGroupProject::CreateAudioGroupProject(*result->bank->group);
         // Native startup e000c188 pushes SFX group 39. Song groups are not SFX.

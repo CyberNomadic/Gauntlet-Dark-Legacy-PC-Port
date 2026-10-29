@@ -63,6 +63,7 @@ formats::LegendsN64Switch lift() {
 
 WorldCollision collisionOf(const formats::LegendsMap& map) {
     std::vector<CollisionTriangle> triangles;
+    triangles.reserve(map.collision.size());
     for (const auto& source : map.collision) {
         triangles.push_back({source.normal, source.vertices, source.owner, 4});
     }
@@ -76,9 +77,9 @@ public:
     explicit MovingImported(const formats::LegendsMap& map) : motion(map, std::array{lift()}) {}
     LegendsWorldMotion motion;
     void capturePresentation() override { motion.capturePresentation(); }
-    void update(f32 seconds, bool) override { motion.update(seconds); }
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
-    }
+    void update(f32 seconds, bool /*timeStopped*/) override { motion.update(seconds); }
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {}
     void bindCollision(WorldCollision& collision) const override {
         motion.bindCollision(collision);
     }
@@ -97,7 +98,9 @@ TEST_CASE("Native moving worlds share collision and common rider tick placement"
     LevelRef ref;
     ref.realmId = -1;
     auto layout = WorldLayout::fromDecoded({}, {}, map.minBounds, map.maxBounds);
-    REQUIRE(world.loadImported(device, {}, ref, std::move(layout), collisionOf(map), imported));
+    const bool loaded =
+        world.loadImported(device, {}, ref, std::move(layout), collisionOf(map), imported);
+    REQUIRE(loaded);
     REQUIRE(world.collision().moving(0));
     CHECK_FALSE(world.collision().moving(1));
     CHECK_FALSE(world.collision().moving(2));
@@ -150,7 +153,7 @@ TEST_CASE("Native contact plates ride only their selected floor owner",
     motion.update(.5f);
     CHECK(motion.platePosition(9)->y == Approx(18.2f));
     plate.groundProjected = false;
-    LegendsWorldMotion mounted{map, std::array{plate}};
+    const LegendsWorldMotion mounted{map, std::array{plate}};
     CHECK(mounted.platePosition(9)->y == 20);
     CHECK_FALSE(mounted.platePosition(999));
 }
@@ -223,7 +226,7 @@ TEST_CASE("Native decorative motion does not invent collision movement",
     map.objects[0].flags = 0;
     auto plate = lift();
     plate.position = {0, 20, 0};
-    LegendsWorldMotion motion{map, std::array{plate}};
+    const LegendsWorldMotion motion{map, std::array{plate}};
     auto collision = collisionOf(map);
     motion.bindCollision(collision);
     CHECK_FALSE(collision.moving(0));
@@ -269,16 +272,16 @@ TEST_CASE("Native target lookup prefers exact names then the first authored subt
     map.objects[1].nativeOrder = 0;
     map.objects[2].parent = -1;
     const auto plate = lift();
-    LegendsWorldMotion prefix{map, std::array{plate}};
+    const LegendsWorldMotion prefix{map, std::array{plate}};
     CHECK(prefix.warnings().empty());
     CHECK(prefix.offset(0) == Vec3{0});
     CHECK(prefix.offset(1).y == -4);
     map.objects[0].name = "ELEV1";
-    LegendsWorldMotion exact{map, std::array{plate}};
+    const LegendsWorldMotion exact{map, std::array{plate}};
     CHECK(exact.offset(0).y == -4);
     CHECK(exact.offset(1) == Vec3{0});
     map.objects[1].name = "ELEV1";
-    LegendsWorldMotion duplicate{map, std::array{plate}};
+    const LegendsWorldMotion duplicate{map, std::array{plate}};
     CHECK(duplicate.offset(0) == Vec3{0});
     CHECK(duplicate.offset(1).y == -4);
 }

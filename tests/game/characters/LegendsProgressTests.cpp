@@ -137,9 +137,9 @@ TEST_CASE("Legends save fields reject malformed identities and masks without tru
     CharacterSave source;
     source.name = "CHECK";
     const auto baseline = Json::parse(source.toJson());
-    for (const Json invalid : {Json(-1), Json(1.5), Json(true), Json("18446744073709551616"),
-                               Json::array(), Json(nullptr)}) {
-        for (const auto field : {"runestones", "shards", "obelisks", "legendItems"}) {
+    for (const Json& invalid : {Json(-1), Json(1.5), Json(true), Json("18446744073709551616"),
+                                Json::array(), Json(nullptr)}) {
+        for (const char* const field : {"runestones", "shards", "obelisks", "legendItems"}) {
             auto document = baseline;
             document["classes"]["WAR"]["legends"]["n64"][field] = invalid;
             CHECK_THROWS_AS(CharacterSave::fromJson(document.dump()), FormatError);
@@ -151,7 +151,7 @@ TEST_CASE("Legends save fields reject malformed identities and masks without tru
               .progress()
               .legendsProgress(LegendsPlatform::N64)
               .runestones == std::numeric_limits<u64>::max());
-    for (const Json invalid :
+    for (const Json& invalid :
          {Json::array({"a", "a"}), Json::array({"b", "a"}), Json::array({"TOWN4"}),
           Json::array({"../town4"}), Json::array({""}), Json::array({false}), Json("town4"),
           Json::array({std::string(LegendsProgress::kMaxMapName + 1, 'a')})}) {

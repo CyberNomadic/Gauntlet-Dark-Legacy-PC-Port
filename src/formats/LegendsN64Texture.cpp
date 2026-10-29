@@ -24,7 +24,7 @@ constexpr usize kRecordSize = 24;
 constexpr usize kDirectoryEntrySize = 12;
 constexpr usize kMaxTextures = 4096;
 constexpr u16 kMaxDimension = 4096;
-constexpr usize kMaxDecodedBytes = 128 * 1024 * 1024;
+constexpr usize kMaxDecodedBytes = usize{128} * 1024 * 1024;
 constexpr u32 kBorrowedPixels = 0xFFFFFFFE;
 constexpr u32 kTemplateLoader = 4;
 constexpr u32 kDynamicPixels = 0x80;
@@ -149,9 +149,10 @@ Image decodePixels(const LegendsN64Texture& texture, std::span<const u8> data, u
                         : texture.format == 7 ? 3
                                               : texture.format;
     const auto size = texture.pixelSize;
-    if (!((format == 0 && (size == 2 || size == 3)) || (format == 2 && (size == 0 || size == 1)) ||
-          (format == 3 && size <= 2) || (format == 4 && size <= 1)) ||
-        (pairedAlpha && size != 1) || (texture.format == 6 && size != 0) ||
+    const bool sized = (format == 0 && (size == 2 || size == 3)) ||
+                       (format == 2 && (size == 0 || size == 1)) || (format == 3 && size <= 2) ||
+                       (format == 4 && size <= 1);
+    if (!sized || (pairedAlpha && size != 1) || (texture.format == 6 && size != 0) ||
         (texture.format == 7 && size != 1)) {
         throw FormatError("Unsupported N64 texture pixel format");
     }
@@ -326,7 +327,7 @@ void resolveLegendsN64ColorRamps(std::vector<LegendsN64Model>& models,
         }
         return true;
     };
-    usize remainingBytes = 64U * 1024U * 1024U;
+    usize remainingBytes = usize{64} * 1024 * 1024;
     using RampKey = std::tuple<u32, u32, u8, u8, u8, u8, u8, u8>;
     std::map<RampKey, u32> converted;
     const auto convert = [&](u32 first, u32 count, const LegendsN64ColorRamp& ramp) {
@@ -415,10 +416,8 @@ void resolveLegendsN64ColorRamps(std::vector<LegendsN64Model>& models,
                     "node animation is outside its archive");
             const auto& motion =
                 animation.textureAnimations[static_cast<usize>(node.textureAnimation)];
-            if (motion.flag != 0 || motion.source < 0 || motion.texture < 0 || motion.frames <= 0) {
-                supported[found->second] = false;
-            } else if (!available(static_cast<u32>(motion.source),
-                                  static_cast<u32>(motion.frames))) {
+            if (motion.flag != 0 || motion.source < 0 || motion.texture < 0 || motion.frames <= 0 ||
+                !available(static_cast<u32>(motion.source), static_cast<u32>(motion.frames))) {
                 supported[found->second] = false;
             }
         }
@@ -510,9 +509,9 @@ void resolveLegendsN64ColorRamps(std::vector<LegendsN64Model>& models,
                 const auto [copy, inserted] =
                     copies.try_emplace(index, static_cast<u32>(model.mesh.vertices.size()));
                 if (inserted) {
-                    constexpr usize charge = sizeof(MeshVertex) + sizeof(u32);
-                    require(remainingBytes >= charge, "geometry variant byte budget exceeded");
-                    remainingBytes -= charge;
+                    constexpr usize kCharge = sizeof(MeshVertex) + sizeof(u32);
+                    require(remainingBytes >= kCharge, "geometry variant byte budget exceeded");
+                    remainingBytes -= kCharge;
                     auto vertex = model.mesh.vertices[index];
                     vertex.color = Color::white(); // Both RGB and alpha bypass SHADE.
                     model.mesh.vertices.push_back(vertex);
@@ -566,8 +565,8 @@ std::vector<LegendsN64TextureScroll> decodeLegendsN64TextureScrolls(std::span<co
         if (scroll.width == 0 || scroll.height == 0 || scroll.width > 1024 ||
             scroll.height > 1024 || !std::isfinite(scroll.texelsPerTick.x) ||
             !std::isfinite(scroll.texelsPerTick.y) ||
-            std::abs(scroll.texelsPerTick.x) > scroll.width ||
-            std::abs(scroll.texelsPerTick.y) > scroll.height) {
+            std::abs(scroll.texelsPerTick.x) > static_cast<f32>(scroll.width) ||
+            std::abs(scroll.texelsPerTick.y) > static_cast<f32>(scroll.height)) {
             throw FormatError("Invalid N64 texture scroll dimensions or speed");
         }
         if (loaders.count < 8 || scroll.commandOffset < loaders.offset ||
@@ -586,8 +585,8 @@ void LegendsN64TextureScrollState::advance(const LegendsN64TextureScroll& scroll
     if (!std::isfinite(seconds) || seconds <= 0.0f || seconds > 60.0f || scroll.width == 0 ||
         scroll.height == 0 || scroll.width > 1024 || scroll.height > 1024 ||
         !std::isfinite(scroll.texelsPerTick.x) || !std::isfinite(scroll.texelsPerTick.y) ||
-        std::abs(scroll.texelsPerTick.x) > scroll.width ||
-        std::abs(scroll.texelsPerTick.y) > scroll.height) {
+        std::abs(scroll.texelsPerTick.x) > static_cast<f32>(scroll.width) ||
+        std::abs(scroll.texelsPerTick.y) > static_cast<f32>(scroll.height)) {
         return;
     }
     m_remainder += static_cast<f64>(seconds) * 30.0;
@@ -624,8 +623,10 @@ Vec2 LegendsN64TextureScrollState::offset(const LegendsN64TextureScroll& scroll)
     }
     // e0025f54/e0025f5c arithmetic-shift the signed 1/32 phase by three
     // before writing the RDP's quarter-texel upper-left tile coordinates.
-    return {-std::floor(static_cast<f32>(m_phase[0]) / 8.0f) / (4.0f * scroll.width),
-            -std::floor(static_cast<f32>(m_phase[1]) / 8.0f) / (4.0f * scroll.height)};
+    return {-std::floor(static_cast<f32>(m_phase[0]) / 8.0f) /
+                (4.0f * static_cast<f32>(scroll.width)),
+            -std::floor(static_cast<f32>(m_phase[1]) / 8.0f) /
+                (4.0f * static_cast<f32>(scroll.height))};
 }
 
 } // namespace gdl::formats

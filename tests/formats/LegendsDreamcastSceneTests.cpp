@@ -406,7 +406,7 @@ TEST_CASE("Dreamcast visible fixtures resolve within their native level and item
             if (resolved) {
                 ++bound;
             } else {
-                missing.push_back(level + ":" + name);
+                missing.emplace_back(level).append(":").append(name);
             }
         }
     }

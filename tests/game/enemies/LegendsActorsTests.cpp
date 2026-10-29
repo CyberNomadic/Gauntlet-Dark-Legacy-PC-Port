@@ -247,7 +247,7 @@ TEST_CASE("Every native archer bomber and suicide placement binds and draws its 
     }
     CHECK(placements == std::array<usize, 3>{331, 172, 155});
     REQUIRE(variants.size() == 15); // five native species, each with A/B/S artwork
-    constexpr std::array suffixes{"A", "B", "S"};
+    constexpr std::array kSuffixes{"A", "B", "S"};
     for (const auto& [key, descriptor] : variants) {
         CAPTURE(key.first, key.second, descriptor.nativeIndex);
         test::FakeRenderDevice device;
@@ -255,7 +255,7 @@ TEST_CASE("Every native archer bomber and suicide placement binds and draws its 
         live.open(device, root, nullptr, 1, {}, 27);
         REQUIRE(live.loadKind(descriptor.spawn.kind));
         const auto expected = std::format("{}{}", enemyKind(descriptor.spawn.kind).prefix,
-                                          suffixes[static_cast<usize>(descriptor.spawn.tier - 4)]);
+                                          kSuffixes[static_cast<usize>(descriptor.spawn.tier - 4)]);
         CAPTURE(expected);
         const std::array roster{descriptor};
         LegendsActors pending;
@@ -326,8 +326,8 @@ TEST_CASE("All six native It placements retain their own animated billboard artw
         SKIP("Native N64 extraction is not installed");
     }
     test::FakeRenderDevice device;
-    constexpr std::array names{"battle1", "castle3", "mount3", "mount5", "town1", "town2"};
-    for (const auto name : names) {
+    constexpr std::array kNames{"battle1", "castle3", "mount3", "mount5", "town1", "town2"};
+    for (const char* const name : kNames) {
         CAPTURE(name);
         auto scene = itScene(device, native, name);
         auto* archive = scene->actorArchive(kItKind);

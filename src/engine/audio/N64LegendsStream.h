@@ -16,7 +16,7 @@ public:
     N64LegendsStream(const N64LegendsStream&) = delete;
     N64LegendsStream& operator=(const N64LegendsStream&) = delete;
 
-    bool open(const std::filesystem::path& nativeAudioDirectory, u16 songId);
+    bool open(const std::filesystem::path& root, u16 songId);
     bool opened() const;
     AudioStreamDesc desc() const override;
     bool read(std::vector<f32>& out, usize frames) override;

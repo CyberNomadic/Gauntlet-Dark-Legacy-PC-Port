@@ -59,46 +59,57 @@ public:
                       TreeModel::Pass pass, f32 presentationAlpha) const = 0;
     /** Mark native moving surface owners once, then synchronize their tick poses
      * before the common player/enemy floor-riding phase. */
-    virtual void bindCollision(WorldCollision&) const {}
-    virtual void syncCollision(WorldCollision&) const {}
+    virtual void bindCollision(WorldCollision& /*collision*/) const {}
+    virtual void syncCollision(WorldCollision& /*collision*/) const {}
 
-    virtual void resetCamera(std::span<const CameraSubject>) {}
-    virtual void followCamera(std::span<const CameraSubject>, f32) {}
-    virtual std::optional<WorldCamera> camera(f32 = -1.0f) const { return std::nullopt; }
+    virtual void resetCamera(std::span<const CameraSubject> /*subjects*/) {}
+    virtual void followCamera(std::span<const CameraSubject> /*subjects*/, f32 /*seconds*/) {}
+    virtual std::optional<WorldCamera> camera(f32 /*alpha*/ = -1.0f) const { return std::nullopt; }
     virtual std::optional<Vec3> cameraAttention() const { return std::nullopt; }
-    virtual Vec3 resolveMovement(const Vec3&, const Vec3& to, f32, f32) const { return to; }
+    virtual Vec3 resolveMovement(const Vec3& /*from*/, const Vec3& to, f32 /*radius*/,
+                                 f32 /*height*/) const {
+        return to;
+    }
     /** Post-motion living visitors only. Grants and local transport are native
      * level rules; the common scene still owns inventory and departure effects. */
-    virtual void updateParty(std::span<PlayerActor*>, f32, bool) {}
+    virtual void updateParty(std::span<PlayerActor*> /*players*/, f32 /*seconds*/,
+                             bool /*timeStopped*/) {}
     virtual std::vector<ImportedPickup> takePickups() { return {}; }
     /** Ordinary melee, missiles and area effects share these native fixtures.
      * Inert bodies remain physical targets but never acquire an attack. */
     virtual std::vector<ImportedTarget> targets() const { return {}; }
-    virtual bool strike(s32, f32, u32, s32) { return false; }
+    virtual bool strike(s32 /*target*/, f32 /*power*/, u32 /*flags*/, s32 /*byPlayer*/) {
+        return false;
+    }
     virtual std::vector<Obstacle> obstacles() const { return {}; }
     virtual std::span<const ImportedGenerator> importedGenerators() const { return {}; }
     virtual std::span<const ImportedActor> importedActors() const { return {}; }
     /** Optional native body supplement, borrowed until this level unloads.
      * Movement/combat remain in the common pools, not in the asset adapter. */
-    virtual ItemArchive* importedActorArchive(s32) const { return nullptr; }
+    virtual ItemArchive* importedActorArchive(s32 /*kind*/) const { return nullptr; }
     virtual const ImportedBoss* importedBoss() const { return nullptr; }
     /** Native death completion, after animation/hold; never a lethal-hit grant. */
-    virtual void bossDefeated(const Vec3&, std::span<PlayerActor*>) {}
+    virtual void bossDefeated(const Vec3& /*position*/, std::span<PlayerActor*> /*players*/) {}
     virtual std::vector<Mat4> arenaAnchors() const { return {}; }
     virtual std::vector<CombatArenaTarget> arenaTargets() const { return {}; }
-    virtual void activateArena(const CombatArenaActivation&) {}
-    virtual bool arenaBlocksSegment(const Vec3&, const Vec3&, f32) const { return false; }
+    virtual void activateArena(const CombatArenaActivation& /*activation*/) {}
+    virtual bool arenaBlocksSegment(const Vec3& /*from*/, const Vec3& /*to*/,
+                                    f32 /*radius*/) const {
+        return false;
+    }
     virtual std::vector<MissileStop> arenaMissileStops() const { return {}; }
-    virtual void updateGenerators(std::span<const ImportedGeneratorState>) {}
-    virtual void watch(const ViewVolume&) {}
+    virtual void updateGenerators(std::span<const ImportedGeneratorState> /*states*/) {}
+    virtual void watch(const ViewVolume& /*view*/) {}
     virtual std::vector<ImportedHazardHit> takeHazardHits() { return {}; }
-    virtual void affectArea(const ImportedAreaDamage&) {}
+    virtual void affectArea(const ImportedAreaDamage& /*damage*/) {}
     /** Called outside the native tick; shared audio settings and pause apply. */
-    virtual void playSounds(SoundPlayer&, const Vec3&) {}
+    virtual void playSounds(SoundPlayer& /*player*/, const Vec3& /*listener*/) {}
     virtual void pauseSounds() {}
     virtual void stopSounds() {}
     virtual bool travelRequested() const { return false; }
-    virtual std::optional<ImportedDeparture> departure(f32 = -1.0f) const { return std::nullopt; }
+    virtual std::optional<ImportedDeparture> departure(f32 /*alpha*/ = -1.0f) const {
+        return std::nullopt;
+    }
 };
 
 } // namespace gdl::game

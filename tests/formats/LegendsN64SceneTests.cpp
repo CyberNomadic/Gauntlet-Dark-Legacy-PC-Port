@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <filesystem>
 #include <set>
 
@@ -34,10 +35,10 @@ void text(std::vector<u8>& bytes, usize at, std::string_view value) {
 }
 
 struct NativeSequence {
-    static constexpr usize body = 8;
-    static constexpr usize sequence = 40;
-    static constexpr usize list = 56;
-    static constexpr usize group = 64;
+    static constexpr usize kBody = 8;
+    static constexpr usize kSequence = 40;
+    static constexpr usize kList = 56;
+    static constexpr usize kGroup = 64;
     std::vector<u8> bytes = std::vector<u8>(88 + 4 * 12);
     std::vector<LegendsN64Model> models = std::vector<LegendsN64Model>(2);
     NativeSequence() {
@@ -46,28 +47,28 @@ struct NativeSequence {
         put32(bytes, 0, 88);
         put32(bytes, 4, 4);
         const std::array<std::string_view, 4> tags{"BODY", "SEQS", "SLST", "GRPS"};
-        const std::array<u32, 4> offsets{body, sequence, list, group};
+        const std::array<u32, 4> offsets{kBody, kSequence, kList, kGroup};
         const std::array<u32, 4> counts{32, 16, 1, 1};
         for (usize i = 0; i < tags.size(); ++i) {
             text(bytes, 88 + i * 12, tags[i]);
             put32(bytes, 92 + i * 12, offsets[i]);
             put32(bytes, 96 + i * 12, counts[i]);
         }
-        put16(bytes, body, 0x2000); // model zero, following position block
-        put16(bytes, body + 2, 0xffff);
-        put16(bytes, body + 4, 2); // child skips position block
-        put16(bytes, body + 8, 128);
-        put16(bytes, body + 10, 64);
-        put16(bytes, body + 12, 32);
-        put16(bytes, body + 16, 1);
-        put16(bytes, body + 18, 0xffff);
-        put16(bytes, body + 20, 0xffff);
-        bytes[sequence + 1] = 16;
-        text(bytes, list, "TEST");
-        put32(bytes, list + 4, sequence);
-        text(bytes, group, "CONTAINER");
-        put32(bytes, group + 16, 1);
-        put32(bytes, group + 20, list);
+        put16(bytes, kBody, 0x2000); // model zero, following position block
+        put16(bytes, kBody + 2, 0xffff);
+        put16(bytes, kBody + 4, 2); // child skips position block
+        put16(bytes, kBody + 8, 128);
+        put16(bytes, kBody + 10, 64);
+        put16(bytes, kBody + 12, 32);
+        put16(bytes, kBody + 16, 1);
+        put16(bytes, kBody + 18, 0xffff);
+        put16(bytes, kBody + 20, 0xffff);
+        bytes[kSequence + 1] = 16;
+        text(bytes, kList, "TEST");
+        put32(bytes, kList + 4, kSequence);
+        text(bytes, kGroup, "CONTAINER");
+        put32(bytes, kGroup + 16, 1);
+        put32(bytes, kGroup + 20, kList);
     }
 };
 
@@ -182,7 +183,7 @@ TEST_CASE("N64 dynamic sequences use the native stream without rebinding their B
     const auto inlineResult =
         decodeLegendsN64Sequences(fixture.bytes, fixture.models, fixture.program);
     const auto dynamic = externalTransform(fixture);
-    const auto before = dynamic;
+    const auto& before = dynamic;
     const auto missing = decodeLegendsN64Sequences(fixture.bytes, fixture.models, fixture.program);
     CHECK(missing.animation.trees.empty());
     REQUIRE(missing.warnings.size() == 1);
@@ -374,7 +375,7 @@ TEST_CASE("N64 native speed bytes retain their periods when bound to AnimationPl
 TEST_CASE("N64 body facing and model sorting map only verified material policies",
           "[legends][n64][scene]") {
     NativeSequence fixture;
-    put16(fixture.bytes, NativeSequence::body, 0x6000); // position + full camera facing
+    put16(fixture.bytes, NativeSequence::kBody, 0x6000); // position + full camera facing
     fixture.models[0].flags = 0x20;
     fixture.models[1].flags = 0x11;
     auto decoded = decodeLegendsN64Sequences(fixture.bytes, fixture.models);
@@ -607,14 +608,14 @@ TEST_CASE("N64 sequence BODY hierarchies decode their own model slots and signed
     CHECK(tree.nodes[1].object == "LID");
     CHECK(tree.nodes[1].parent == 0);
     CHECK(decoded.warnings.empty());
-    put16(fixture.bytes, NativeSequence::body + 18, 0);
+    put16(fixture.bytes, NativeSequence::kBody + 18, 0);
     CHECK_THROWS_AS(decodeLegendsN64Sequences(fixture.bytes, fixture.models), FormatError);
 }
 
 TEST_CASE("N64 BODY projected-yaw flags use the explicit native camera mode",
           "[legends][n64][scene][facing]") {
     NativeSequence fixture;
-    put16(fixture.bytes, NativeSequence::body, 0xa000);
+    put16(fixture.bytes, NativeSequence::kBody, 0xa000);
     const auto decoded = decodeLegendsN64Sequences(fixture.bytes, fixture.models);
     REQUIRE(decoded.warnings.empty());
     REQUIRE(decoded.animation.trees.size() == 1);
@@ -622,7 +623,7 @@ TEST_CASE("N64 BODY projected-yaw flags use the explicit native camera mode",
           CameraFrame::kFacingProjectedYaw);
     // Native invisible group mode2 has different orientation and stays explicit
     // until it is decoded; do not silently alias it to mode1.
-    put16(fixture.bytes, NativeSequence::body, 0xa800);
+    put16(fixture.bytes, NativeSequence::kBody, 0xa800);
     const auto group = decodeLegendsN64Sequences(fixture.bytes, fixture.models);
     REQUIRE(group.warnings.size() == 1);
     CHECK(group.warnings[0].starts_with("CONTAINER:TEST: "));
@@ -642,8 +643,8 @@ TEST_CASE("N64 named BODY models resolve only inside the supplied appearance arc
     put32(fixture.bytes, 148, 88);
     put32(fixture.bytes, 152, 8);
     text(fixture.bytes, 88, "LID");
-    put16(fixture.bytes, NativeSequence::body, 0x21ff);
-    put16(fixture.bytes, NativeSequence::body + 6, 22);
+    put16(fixture.bytes, NativeSequence::kBody, 0x21ff);
+    put16(fixture.bytes, NativeSequence::kBody + 6, 22);
     const auto decoded = decodeLegendsN64Sequences(fixture.bytes, fixture.models);
     REQUIRE(decoded.warnings.empty());
     REQUIRE(decoded.animation.trees.size() == 1);
@@ -656,7 +657,7 @@ TEST_CASE("N64 named BODY models resolve only inside the supplied appearance arc
     CHECK(missing.animation.trees[0].nodes[1].object == "OTHER");
     CHECK(missing.animation.trees[0].nodes[1].parent == 0);
     SECTION("name outside BDAT") {
-        put16(fixture.bytes, NativeSequence::body + 6, 21);
+        put16(fixture.bytes, NativeSequence::kBody + 6, 21);
     }
     SECTION("unterminated name") {
         std::fill(fixture.bytes.begin() + 88, fixture.bytes.begin() + 96, static_cast<u8>('X'));
@@ -668,14 +669,14 @@ TEST_CASE("N64 sequence parser rejects escaping groups, meshes and truncated pos
           "[legends][n64][scene]") {
     NativeSequence fixture;
     SECTION("escaping SLST") {
-        put32(fixture.bytes, NativeSequence::group + 20, 4);
+        put32(fixture.bytes, NativeSequence::kGroup + 20, 4);
     }
     SECTION("missing model") {
-        put16(fixture.bytes, NativeSequence::body, 42);
+        put16(fixture.bytes, NativeSequence::kBody, 42);
     }
     SECTION("missing position") {
-        put16(fixture.bytes, NativeSequence::sequence + 4, 3);
-        put16(fixture.bytes, NativeSequence::body + 24, 0x2000);
+        put16(fixture.bytes, NativeSequence::kSequence + 4, 3);
+        put16(fixture.bytes, NativeSequence::kBody + 24, 0x2000);
     }
     CHECK_THROWS_AS(decodeLegendsN64Sequences(fixture.bytes, fixture.models), FormatError);
 }
@@ -971,7 +972,8 @@ TEST_CASE("All extracted N64 maps bind native placement templates and scoped sce
                     for (usize frame = 1; frame < track.frames.size(); ++frame) {
                         if (!std::equal(track.values.begin(),
                                         track.values.begin() + track.channelCount(),
-                                        track.values.begin() + frame * track.channelCount())) {
+                                        track.values.begin() + static_cast<std::ptrdiff_t>(
+                                                                   frame * track.channelCount()))) {
                             ++movingTracks;
                             break;
                         }

@@ -161,7 +161,8 @@ std::optional<f32> legendsN64TrapScale(std::span<const u8> program, std::string_
     for (usize i = 0; i < 128; ++i) {
         const usize at = 0xe006c468U - kProgramBase + i * 40;
         range(program, at, 40);
-        const u32 realm = readU32BE(program, at), level = readU32BE(program, at + 4);
+        const u32 realm = readU32BE(program, at);
+        const u32 level = readU32BE(program, at + 4);
         if (realm == 16) {
             terminated = true;
             break;

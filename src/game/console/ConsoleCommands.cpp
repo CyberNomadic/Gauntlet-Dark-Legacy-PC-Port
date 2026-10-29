@@ -1,15 +1,11 @@
 #include "game/console/ConsoleCommands.h"
 
-#include <cstring>
-
-#include "game/characters/ClassData.h"
-#include "game/characters/NameCheats.h"
-
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cctype>
 #include <charconv>
+#include <cstring>
 #include <format>
 #include <initializer_list>
 #include <map>
@@ -19,6 +15,7 @@
 
 #include "game/characters/ClassData.h"
 #include "game/characters/LevelRecord.h"
+#include "game/characters/NameCheats.h"
 #include "game/characters/Progression.h"
 #include "game/characters/Relics.h"
 #include "game/enemies/DeathRules.h"
@@ -399,10 +396,11 @@ ConsoleCommands::switchEntries(std::span<const SwitchEntry> switches) {
 }
 
 std::string ConsoleCommands::activateUsage() {
-    return usage({{"activate $SELECTED", "fires the switch selected, as if you stood on it"},
-                  {"activate switch#N", "the same, by the token list switches gives"},
-                  {"activate <id or name>", "the same, by a switch's id, its name or its target's"}},
-                 {"The camera follows what it opens, as it does for a player."});
+    return usage(
+        {{"activate $SELECTED", "fires the switch selected, as if you stood on it"},
+         {"activate switch#N", "the same, by the token list switches gives"},
+         {"activate <id or name>", "the same, by a switch's id, its name or its target's"}},
+        {"The camera follows what it opens, as it does for a player."});
 }
 
 std::optional<ConsoleCommands::LockRequest>
@@ -498,7 +496,7 @@ std::optional<std::optional<s32>> ConsoleCommands::parsePartyCount(Arguments arg
         error = partyCountUsage();
         return std::nullopt;
     }
-    return std::optional<s32>{*count};
+    return count;
 }
 
 std::string ConsoleCommands::getUsage() {

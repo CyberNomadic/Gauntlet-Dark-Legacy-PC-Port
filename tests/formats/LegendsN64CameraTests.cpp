@@ -42,16 +42,16 @@ std::vector<u8> settings() {
 }
 
 std::vector<u8> program() {
-    constexpr usize table = 0xe006eedcU - 0xe0000400U;
-    std::vector<u8> bytes(table + 96);
-    constexpr std::array<u32, 5> ids{0, 3, 7, 6, 12};
-    for (usize i = 0; i < ids.size(); ++i) {
-        put32(bytes, table + i * 16, ids[i]);
-        put32(bytes, table + i * 16 + 4, std::bit_cast<u32>(10.0f + static_cast<f32>(i)));
-        put32(bytes, table + i * 16 + 8, std::bit_cast<u32>(2.0f));
-        put32(bytes, table + i * 16 + 12, std::bit_cast<u32>(-15.0f));
+    constexpr usize kTable = 0xe006eedcU - 0xe0000400U;
+    std::vector<u8> bytes(kTable + 96);
+    constexpr std::array<u32, 5> kIds{0, 3, 7, 6, 12};
+    for (usize i = 0; i < kIds.size(); ++i) {
+        put32(bytes, kTable + i * 16, kIds[i]);
+        put32(bytes, kTable + i * 16 + 4, std::bit_cast<u32>(10.0f + static_cast<f32>(i)));
+        put32(bytes, kTable + i * 16 + 8, std::bit_cast<u32>(2.0f));
+        put32(bytes, kTable + i * 16 + 12, std::bit_cast<u32>(-15.0f));
     }
-    put32(bytes, table + 80, 16);
+    put32(bytes, kTable + 80, 16);
     return bytes;
 }
 
@@ -99,26 +99,26 @@ TEST_CASE("N64 camera rejects incomplete and unsupported native records",
 
 TEST_CASE("N64 tower refuses missing or corrupt return direction tables",
           "[legends][camera][formats]") {
-    constexpr usize table = 0xe006eedcU - 0xe0000400U;
+    constexpr usize kTable = 0xe006eedcU - 0xe0000400U;
     auto bytes = program();
     SECTION("missing program") {
         bytes.clear();
     }
     SECTION("truncated sentinel") {
-        bytes.resize(table + 82);
+        bytes.resize(kTable + 82);
     }
     SECTION("foreign table layout") {
-        put32(bytes, table, 9);
+        put32(bytes, kTable, 9);
     }
     SECTION("missing terminator") {
-        put32(bytes, table + 80, 3);
+        put32(bytes, kTable + 80, 3);
     }
     SECTION("zero direction") {
-        put32(bytes, table + 4, 0);
-        put32(bytes, table + 12, 0);
+        put32(bytes, kTable + 4, 0);
+        put32(bytes, kTable + 12, 0);
     }
     SECTION("nonfinite direction") {
-        put32(bytes, table + 4, std::bit_cast<u32>(std::numeric_limits<f32>::infinity()));
+        put32(bytes, kTable + 4, std::bit_cast<u32>(std::numeric_limits<f32>::infinity()));
     }
     CHECK_THROWS_AS(decodeLegendsN64Camera(settings(), "tower2", bytes), FormatError);
 }

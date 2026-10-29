@@ -13,9 +13,9 @@
 #include "FakeRenderDevice.h"
 #include "TestSupport.h"
 #include "game/config/GameConfig.h"
+#include "game/menu/MainMenuFactory.h"
 #include "game/menu/MenuInput.h"
 #include "game/scenes/GameContext.h"
-#include "game/menu/MainMenuFactory.h"
 #include "game/scenes/TitleScene.h"
 
 namespace {
@@ -182,7 +182,8 @@ TEST_CASE("Quit to Desktop asks first and quits on Yes", "[game][title][assets]"
     test::FakeRenderDevice device;
     const Fixture f;
     TitleScene scene;
-    REQUIRE(scene.open(device, f.context(nullptr)));
+    const auto context = f.context(nullptr); // Resolve SKIP before entering an assertion.
+    REQUIRE(scene.open(device, context));
     scene.step(1, press(true));
     REQUIRE(scene.menuOpen());
     // Three rows: the factory lifts the column so Quit to Desktop ends above the bottom.

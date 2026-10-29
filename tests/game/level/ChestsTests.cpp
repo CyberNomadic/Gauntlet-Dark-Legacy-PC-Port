@@ -3,10 +3,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "../../engine/world/SampleLevel.h"
-#include "FakeRenderDevice.h"
 #include "engine/assets/AssetScope.h"
 #include "engine/io/File.h"
+
+#include "../../engine/world/SampleLevel.h"
+#include "FakeRenderDevice.h"
 #include "game/level/Chests.h"
 
 namespace {
@@ -65,7 +66,7 @@ struct Fixture {
         chests.setPlayerCount(1);
         REQUIRE(chests.size() == 2);
     }
-    AssetScope scope() { return AssetScope(items, &realm); }
+    AssetScope scope() { return {items, &realm}; }
 };
 
 TEST_CASE("a random chest cycles through its choices with the item clock until it is opened",

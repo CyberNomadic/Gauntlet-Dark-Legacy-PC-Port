@@ -113,7 +113,7 @@ TEST_CASE("native Legends boss stages preserve placements and deferred pickup re
             CHECK(encounter->finalNativeGrant == 0x300290U);
         }
     }
-    for (const auto map : {"boss1", "hell1", "tower2", "mount5", "ice6", "unknown"}) {
+    for (const char* const map : {"boss1", "hell1", "tower2", "mount5", "ice6", "unknown"}) {
         CAPTURE(map);
         CHECK_FALSE(legendsN64Boss(map, program, overlay));
     }

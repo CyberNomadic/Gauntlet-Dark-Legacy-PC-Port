@@ -71,8 +71,9 @@ struct ArenaCombatFixture {
         ref.realmId = -1;
         ref.realm = "Legends";
         ref.name = "n64:mount6";
-        REQUIRE(
-            world.loadImported(device, root, ref, std::move(layout), std::move(collision), native));
+        const bool loaded =
+            world.loadImported(device, root, ref, std::move(layout), std::move(collision), native);
+        REQUIRE(loaded);
         REQUIRE(classes.load(root / "PDATA"));
         const auto* stats = classes.stats(0);
         REQUIRE(stats);
@@ -132,9 +133,9 @@ TEST_CASE("Native arena cover remains a physical target without acquiring the pl
         }
     }
 
-    static constexpr MissileSpec spec{"TEST", {}, .1f, 0, 0, true};
+    static constexpr MissileSpec kSpec{"TEST", {}, .1f, 0, 0, true};
     MissileLaunch shot;
-    shot.spec = &spec;
+    shot.spec = &kSpec;
     shot.owner = 0;
     shot.position = f.cover + Vec3{0, 2, -4};
     shot.velocity = {0, 0, 30};

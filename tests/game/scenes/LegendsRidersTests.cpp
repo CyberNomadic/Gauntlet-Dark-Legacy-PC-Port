@@ -96,12 +96,12 @@ TEST_CASE("Native Castle runestone art and pickup contact ride their actual movi
     // Pickup contact takes a centre and vertical half-extent, not feet and
     // full player height. The old centre still overlaps a tall pickup after
     // four units of travel, so probe just inside its original lower boundary.
-    constexpr f32 halfHeight = 1.5f;
-    const Vec3 contact = baseline - Vec3{0, still->pickups()[index].height + halfHeight - .25f, 0};
-    REQUIRE(touchesLegendsPickup(still->pickups()[index], contact, .5f, halfHeight));
-    CHECK_FALSE(touchesLegendsPickup(moving->pickups()[index], contact, .5f, halfHeight));
+    constexpr f32 kHalfHeight = 1.5f;
+    const Vec3 contact = baseline - Vec3{0, still->pickups()[index].height + kHalfHeight - .25f, 0};
+    REQUIRE(touchesLegendsPickup(still->pickups()[index], contact, .5f, kHalfHeight));
+    CHECK_FALSE(touchesLegendsPickup(moving->pickups()[index], contact, .5f, kHalfHeight));
     CHECK(touchesLegendsPickup(moving->pickups()[index], contact + displaced - baseline, .5f,
-                               halfHeight));
+                               kHalfHeight));
     const auto movedArt = nearbyGeometry(*moving, movingDevice, displaced);
     const auto stillArt = nearbyGeometry(*still, stillDevice, baseline);
     REQUIRE_FALSE(stillArt.empty());

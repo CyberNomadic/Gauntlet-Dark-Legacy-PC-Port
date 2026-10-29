@@ -42,7 +42,7 @@ TEST_CASE("the title menu's rows stand where Press Start stands and never leave 
 
 TEST_CASE("the title menu is built centred, every row in view, by the factory",
           "[game][menu][title][main-menu]") {
-    BitmapFont font = titleFont();
+    const BitmapFont font = titleFont();
     test::FakeTexture sheet{64, 64};
     TextPainter painter;
     painter.setFont(&font, &sheet);

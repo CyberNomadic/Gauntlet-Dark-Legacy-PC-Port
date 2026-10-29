@@ -27,7 +27,7 @@ LegendsN64Tower decodeLegendsN64Tower(std::span<const u8> overlay) {
         if (at == overlay.size()) {
             throw FormatError("N64 Legends Tower: unterminated script name");
         }
-        return std::string(reinterpret_cast<const char*>(overlay.data() + begin), at - begin);
+        return std::string(std::bit_cast<const char*>(overlay.data() + begin), at - begin);
     };
     const auto vector = [&](usize at) {
         return Vec3{std::bit_cast<f32>(readU32BE(overlay, at)),
@@ -83,13 +83,13 @@ LegendsN64Tower decodeLegendsN64Tower(std::span<const u8> overlay) {
     // e08614d0 places the stones around the native floor's rune shadow; its
     // e08615d4 angle is atan2(centre.x-x, centre.z-z). The following basis
     // operations reproduce e0013878 then e0013b18 in the column-vector engine.
-    constexpr std::array<usize, 13> runeArchives{0xa6dc, 0xa6e8, 0xa6f4, 0xa700, 0xa70c,
-                                                 0xa718, 0xa724, 0xa730, 0xa73c, 0xa748,
-                                                 0xa758, 0xa768, 0xa778};
+    constexpr std::array<usize, 13> kRuneArchives{0xa6dc, 0xa6e8, 0xa6f4, 0xa700, 0xa70c,
+                                                  0xa718, 0xa724, 0xa730, 0xa73c, 0xa748,
+                                                  0xa758, 0xa768, 0xa778};
     const Vec3 centre = vector(0x967c);
     for (usize i = 0; i < result.runestones.size(); ++i) {
         auto& relic = result.runestones[i];
-        relic.archive = text(runeArchives[i]).substr(1);
+        relic.archive = text(kRuneArchives[i]).substr(1);
         relic.model = text(readU32BE(overlay, 0x971c + i * 4) - 0xe0860000U);
         const f32 phase = static_cast<f32>(i + 1) * std::bit_cast<f32>(0x3ee90690U) +
                           std::bit_cast<f32>(0x3e2d38fcU) - kHalfPi;
@@ -101,11 +101,11 @@ LegendsN64Tower decodeLegendsN64Tower(std::span<const u8> overlay) {
     }
     // e0862fc4's shard pointer/position tables are in native identity order:
     // Mountain, Ice, Castle, Town (not realm-table order or GDL shard order).
-    constexpr std::array<usize, 4> shardArchives{0xa7b4, 0xa79c, 0xa7c0, 0xa7a8};
+    constexpr std::array<usize, 4> kShardArchives{0xa7b4, 0xa79c, 0xa7c0, 0xa7a8};
     const f32 shardScale = std::bit_cast<f32>(readU32BE(overlay, 0x9790));
     for (usize i = 0; i < result.shards.size(); ++i) {
         auto& relic = result.shards[i];
-        relic.archive = text(shardArchives[i]);
+        relic.archive = text(kShardArchives[i]);
         relic.model = text(readU32BE(overlay, 0x9750 + i * 4) - 0xe0860000U);
         relic.placement = glm::translate(Mat4{1}, vector(0x9760 + i * 12)) *
                           glm::scale(Mat4{1}, Vec3{shardScale});

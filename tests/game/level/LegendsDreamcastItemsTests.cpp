@@ -199,13 +199,13 @@ TEST_CASE("Dreamcast runes obelisks and quest items use separate native campaign
     CHECK_FALSE(legendsDreamcastPickup(fixture.info, fixture.instance, 90));
     fixture.info.subtype = 13;
     fixture.info.value = 0;
-    constexpr std::array<s32, 9> expected{0, 2, 1, 4, 3, 5, 6, 0, 0};
-    for (s32 realm = 0; realm < static_cast<s32>(expected.size()); ++realm) {
+    constexpr std::array<s32, 9> kExpected{0, 2, 1, 4, 3, 5, 6, 0, 0};
+    for (s32 realm = 0; realm < static_cast<s32>(kExpected.size()); ++realm) {
         const auto pickup = legendsDreamcastPickup(fixture.info, fixture.instance, 91, realm);
         REQUIRE(pickup);
         REQUIRE(pickup->award);
         CHECK(pickup->award->kind == LegendsRelic::LegendItem);
-        CHECK(pickup->award->index == expected[static_cast<usize>(realm)]);
+        CHECK(pickup->award->index == kExpected[static_cast<usize>(realm)]);
         CHECK(pickup->offer.kind == 0);
     }
     CHECK_FALSE(legendsDreamcastPickup(fixture.info, fixture.instance, 91));
@@ -357,6 +357,7 @@ TEST_CASE("Dreamcast pickup adapter covers every native placed pickup",
         ++levels;
     }
     CHECK(levels == 41);
-    constexpr std::array<usize, 14> expected{0, 713, 358, 164, 105, 62, 19, 11, 0, 46, 13, 0, 9, 5};
-    CHECK(counts == expected);
+    constexpr std::array<usize, 14> kExpected{0,  713, 358, 164, 105, 62, 19,
+                                              11, 0,   46,  13,  0,   9,  5};
+    CHECK(counts == kExpected);
 }

@@ -286,10 +286,11 @@ TEST_CASE("native world history shares static placements without losing diagnost
     CHECK_FALSE(replay.scene.equalLocal(beforeDiagnostic, unsettled));
     const auto step = [](WorldScene& scene, u32 tick) {
         scene.capturePresentation();
-        scene.setObjectTransform(8,
-                                 glm::translate(Mat4{1}, Vec3{0, tick, 50}) *
-                                     glm::rotate(Mat4{1}, static_cast<f32>(tick) * 0.1f, Vec3{0, 1, 0}),
-                                 tick % 5 == 0);
+        scene.setObjectTransform(
+            8,
+            glm::translate(Mat4{1}, Vec3{0, tick, 50}) *
+                glm::rotate(Mat4{1}, static_cast<f32>(tick) * 0.1f, Vec3{0, 1, 0}),
+            tick % 5 == 0);
         scene.setObjectAlpha(9, static_cast<f32>(tick % 10) / 10);
         REQUIRE(scene.setObjectVisible(11, tick % 3 != 0));
         scene.setTextureOffset(0, {static_cast<f32>(tick) * 0.007f, 0});
@@ -642,8 +643,7 @@ TEST_CASE("world core rejects malformed state before changing any participating 
     case 11: invalid.hidden = {1000, 1000}; break;
     case 12: invalid.units.front().alpha = 2; break;
     case 13: invalid.light.points.front().radius = -1; break;
-    default:
-        break;
+    default: break;
     }
     CAPTURE(mutation);
     CHECK_FALSE(fixture.checkpoint.prepareRestore(invalid));
@@ -812,7 +812,7 @@ TEST_CASE("world state flat membership checks preserve unordered native rosters"
     state.contactOnly = {500, 0, -1, 2};
     state.blockedFloorExits = {300, 1'000'000, 0};
     state.moving = {{1'000'000, Mat4{1}}, {0, Mat4{1}}, {800, Mat4{1}}};
-    state.animations = {{512, 3, 0}, {0, 3, 1}};
+    state.animations = {{.object = 512, .frames = 3}, {.object = 0, .frames = 3, .frame = 1}};
     state.cycles = {{0, false}, {512, true}, {0, true}};
     const auto original = state;
     REQUIRE(state.valid());

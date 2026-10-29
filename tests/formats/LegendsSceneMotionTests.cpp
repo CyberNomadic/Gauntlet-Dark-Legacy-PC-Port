@@ -35,7 +35,7 @@ std::vector<u8> world() {
     put32(bytes, 100, 300);
     put32(bytes, 104, 1);
     put32(bytes, 108, 348);
-    for (usize at : {120U, 180U, 240U}) {
+    for (const usize at : {120U, 180U, 240U}) {
         put16(bytes, at + 44, 0xffff);
         put16(bytes, at + 46, 0xffff);
     }
@@ -63,8 +63,8 @@ std::vector<u8> animation() {
     put32(bytes, 8, 1);
     put32(bytes, 12, 16);
     put16(bytes, 16, 0xffff);
-    constexpr std::string_view name = "WATER";
-    std::copy(name.begin(), name.end(), bytes.begin() + 20);
+    constexpr std::string_view kName = "WATER";
+    std::copy(kName.begin(), kName.end(), bytes.begin() + 20);
     put32(bytes, 16 + 0x44, 3);
     put32(bytes, 16 + 0x48, static_cast<u32>(TextureAnimation::kScrollV));
     put16(bytes, 16 + 0x4c, 120);

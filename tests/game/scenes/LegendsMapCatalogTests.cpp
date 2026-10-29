@@ -152,8 +152,8 @@ TEST_CASE("Legends short names resolve case insensitively while explicit paths a
     CHECK(legendsMapPath(maps, "levela1") == std::filesystem::path{"disc maps/levelA1"});
     CHECK_FALSE(legendsMapPath(maps, "unknown"));
     CHECK_FALSE(legendsMapPath(maps, ""));
-    for (const auto value : {"./mount1", "../Other Maps/mount1", "C:\\Native Maps\\mount1",
-                             "/native/maps/mount1", "folder\\levelA1"}) {
+    for (const char* const value : {"./mount1", "../Other Maps/mount1", "C:\\Native Maps\\mount1",
+                                    "/native/maps/mount1", "folder\\levelA1"}) {
         INFO(value);
         CHECK(legendsMapPath({}, value) == std::filesystem::path{value});
     }

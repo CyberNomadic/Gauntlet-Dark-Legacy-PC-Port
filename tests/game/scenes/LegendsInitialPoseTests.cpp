@@ -153,6 +153,7 @@ TEST_CASE("Every native Dreamcast map applies initial keys with finite collision
         const auto data = LegendsSceneMotion::parseDreamcast(worlds);
         auto scene = LegendsMap::parseDreamcast(worlds, readFile(folder.path() / "objects.rom"));
         std::vector<Mat4> before;
+        before.reserve(scene.objects.size());
         for (const auto& object : scene.objects) {
             before.push_back(object.transform);
         }

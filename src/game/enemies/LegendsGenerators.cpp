@@ -125,6 +125,8 @@ legendsN64Generator(const formats::LegendsN64Fixture& fixture, std::span<const u
             ch = static_cast<char>(ch - 'A' + 'a');
         }
     }
+    // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto roster = std::ranges::find(kRosters, name, &Roster::level);
     if (roster == kRosters.end()) {
         return reject("N64 generator level has no verified enemy roster");
@@ -140,9 +142,9 @@ legendsN64Generator(const formats::LegendsN64Fixture& fixture, std::span<const u
     }
     // e0067818's species→PGEn key table at e0067fb8. Skeleton variants have
     // no replacement entry and deliberately retain the original generator art.
-    constexpr std::array<u8, 20> keys{2,  3,  4,  6,  5,  7,  9,  10, 11, 12,
-                                      13, 14, 19, 20, 21, 16, 18, 17, 0,  0};
-    const u16 remapped = static_cast<u16>(0x0600U | keys[static_cast<usize>(species)]);
+    constexpr std::array<u8, 20> kKeys{2,  3,  4,  6,  5,  7,  9,  10, 11, 12,
+                                       13, 14, 19, 20, 21, 16, 18, 17, 0,  0};
+    const u16 remapped = static_cast<u16>(0x0600U | kKeys[static_cast<usize>(species)]);
     if (const auto replacement = find(remapped, fixture.generatorTier); !replacement.empty()) {
         record = replacement;
     }

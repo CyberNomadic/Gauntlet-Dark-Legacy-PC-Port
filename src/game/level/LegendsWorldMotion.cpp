@@ -20,9 +20,9 @@ LegendsWorldMotion::LegendsWorldMotion(const formats::LegendsMap& map,
     for (const auto& object : map.objects) {
         m_objectParents.push_back(object.parent);
     }
-    for (usize object = 0; object < m_objectParents.size(); ++object) {
+    for (const s32 first : m_objectParents) {
         usize depth = 0;
-        for (s32 parent = m_objectParents[object]; parent != -1;
+        for (s32 parent = first; parent != -1;
              parent = m_objectParents[static_cast<usize>(parent)]) {
             if (parent < 0 || static_cast<usize>(parent) >= map.objects.size() ||
                 ++depth >= map.objects.size()) {
@@ -89,7 +89,7 @@ LegendsWorldMotion::LegendsWorldMotion(const formats::LegendsMap& map,
             m_collisionObjects.push_back(index);
         }
         m_objectTargets[static_cast<usize>(index)] = static_cast<s32>(target);
-        m_soundPositions.push_back(Vec3{map.objects[static_cast<usize>(index)].transform[3]});
+        m_soundPositions.emplace_back(map.objects[static_cast<usize>(index)].transform[3]);
         m_sounding.push_back(false);
     }
 }

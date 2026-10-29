@@ -557,7 +557,7 @@ template <class A, class T> void field(A& a, T& v) {
     } else if constexpr (std::is_same_v<V, WorldStateCheckpoint::Cycle>) {
         fields(a, v.object, v.wrapped);
     } else if constexpr (std::is_same_v<V, WorldAnimator::Cursor>) {
-        fields(a, v.object, v.frames, v.frame, v.reverse, v.once, v.finished, v.held,
+        fields(a, v.object, v.frames, v.seam, v.frame, v.reverse, v.once, v.finished, v.held,
                v.presentationCut);
     } else if constexpr (std::is_same_v<V, LevelWorldCheckpoint::Cue>) {
         field(a, v.kind);

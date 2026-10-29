@@ -102,7 +102,7 @@ public:
     /** Installs an imported native placement into the normal GDL brood and damage
      * paths. Its level owns the artwork; only this pool slot's default art is hidden. */
     std::optional<s32> spawnImported(RenderDevice& device, Enemies& enemies,
-                                     const ImportedGenerator& placement);
+                                     const ImportedGenerator& imported);
     bool externallyPresented(s32 id) const;
     /** A boss effect leaves a tier-one generator. Its optional BOSSGEN art is borrowed. */
     bool placeBoss(RenderDevice& device, const ItemInfo& info, ItemArchive& items, Enemies& enemies,

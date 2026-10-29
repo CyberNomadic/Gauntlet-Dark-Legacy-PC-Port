@@ -28,7 +28,7 @@ public:
         std::optional<LevelTransportersCheckpoint::State> transporters;
         bool operator==(const State&) const = default;
     };
-    static constexpr u32 kVersion = 7;
+    static constexpr u32 kVersion = 8;
     static constexpr usize kHeaderBytes = 56;
     static constexpr usize kMaxBytes = static_cast<const usize>(512 * 1024);
     static constexpr usize kMaxDecodedBytes = static_cast<const usize>(4 * 1024 * 1024);

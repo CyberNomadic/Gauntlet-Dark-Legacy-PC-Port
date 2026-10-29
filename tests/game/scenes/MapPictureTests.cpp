@@ -61,7 +61,7 @@ struct Cut {
                  region(whole, static_cast<s32>(half), 0, half, upper),
                  region(whole, off, static_cast<s32>(upper) - off, half, lower),
                  region(whole, static_cast<s32>(half), static_cast<s32>(upper), half, lower)};
-        placed = {{{&tiles[0], 0, 0},
+        placed = {{{tiles.data(), 0, 0},
                    {&tiles[1], half, 0},
                    {&tiles[2], 0, upper},
                    {&tiles[3], half, upper}}};
@@ -177,7 +177,8 @@ TEST_CASE("the Mothership preview's lower-left quarter is slid back into line",
     CHECK(slides[2].dx == 5);
     const Image upper = MapPicture::join(std::array{placed[0], placed[1]});
     const auto plain = MapPicture::joinCost(upper, placed[2], 0, 256);
-    const auto slid = MapPicture::joinCost(upper, placed[2], 256 * 0 + slides[2].dx, 256 + slides[2].dy);
+    const auto slid =
+        MapPicture::joinCost(upper, placed[2], 256 * 0 + slides[2].dx, 256 + slides[2].dy);
     REQUIRE(plain);
     REQUIRE(slid);
     CHECK(slid->error < plain->error * MapPicture::kClearGain);

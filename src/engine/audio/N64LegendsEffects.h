@@ -18,7 +18,7 @@ public:
     N64LegendsEffects(const N64LegendsEffects&) = delete;
     N64LegendsEffects& operator=(const N64LegendsEffects&) = delete;
 
-    bool open(const std::filesystem::path& nativeAudioDirectory);
+    bool open(const std::filesystem::path& root);
     bool opened() const;
     bool contains(u16 cue) const;
     std::span<const u16> cueIds() const;

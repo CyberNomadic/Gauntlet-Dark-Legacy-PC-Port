@@ -35,7 +35,7 @@ void LegendsSceneAdapter::bindN64Switch(RenderDevice& device,
     if (definition.hidden()) {
         binding.activeFigure.reset();
     }
-    m_switchPresentation.push_back(std::move(binding));
+    m_switchPresentation.push_back(binding);
 }
 
 void LegendsSceneAdapter::bindWorldMotion(const formats::LegendsMap& map,
@@ -76,7 +76,7 @@ void LegendsSceneAdapter::updateSwitches() {
             m_hiddenFixtures[*plate.activeFigure] = !active;
             auto& figure = m_fixtures[active ? *plate.activeFigure : plate.idleFigure];
             const auto* sequence = figure.sequenceInfo(0);
-            figure.play(0, sequence && sequence->repeats);
+            figure.play(0, sequence != nullptr && sequence->repeats);
             figure.capturePresentation();
         }
     }

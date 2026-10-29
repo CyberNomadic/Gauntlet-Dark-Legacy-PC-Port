@@ -68,7 +68,7 @@ struct LegendsMap {
      * UVs remain in texels; normalize per part's texture dimensions. Texture pixels may be
      * decoded separately with decodeLegendsN64Textures; native material state is not applied. */
     static LegendsMap parseN64(std::span<const u8> worlds, std::span<const u8> models,
-                               std::span<const u8> placements = {});
+                               std::span<const u8> placementBytes = {});
 
     /** Decodes Dreamcast's little-endian worlds.rom and v1 objects.rom.
      * Static geometry only; MeshPart::texture retains the native bitmap index.

@@ -17,7 +17,7 @@ bool LegendsSounds::openN64(const std::filesystem::path& root) {
     m_entries.clear();
     try {
         FileStream file(root / "_program/game.bin");
-        if (file.size() < 0x7b514 - 0x400 || file.size() > 4 * 1024 * 1024) {
+        if (file.size() < 0x7b514 - 0x400 || file.size() > u64{4} * 1024 * 1024) {
             throw FormatError("unsupported native N64 sound routing program");
         }
         const auto program = file.readExact(static_cast<usize>(file.size()));

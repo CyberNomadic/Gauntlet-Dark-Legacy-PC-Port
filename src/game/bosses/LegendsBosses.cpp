@@ -85,6 +85,8 @@ legendsN64Boss(std::string_view map, std::span<const u8> program, std::span<cons
     }
     authenticate(bossOverlay, 58608,
                  "87051fc6527f842ea144dd13bb7fab301703df441cb4ebe8b80b721ba33a93f2");
+    // MSVC's checked array iterator is not a pointer; keep the portable iterator type.
+    // NOLINTNEXTLINE(readability-qualified-auto)
     const auto counterpart = std::ranges::find(kCounterparts, stage->realm, &Counterpart::realm);
     if (counterpart == kCounterparts.end()) {
         throw FormatError("N64 Legends boss: unknown encounter realm");
@@ -194,18 +196,18 @@ legendsN64BossRewardFixtures(const LegendsBossEncounter& encounter, std::span<co
         fixture.templateAmount = std::bit_cast<s16>(readU16BE(powerups, at + 2));
         fixture.pickupLimit = readU32BE(powerups, at + 20);
         fixture.pickupSound = readU32BE(powerups, at + 24);
-        constexpr std::array armorArchives{"items/s/bossm", "items/s/bossh", "items/s/bossgr",
-                                           "items/s/bossgl"};
-        constexpr std::array shardArchives{"items/s/sm", "items/s/si", "items/s/sc", "items/s/st"};
-        constexpr std::array<u32, 4> armorIdentities{0x620, 0x630, 0xa40, 0xa50};
+        constexpr std::array kArmorArchives{"items/s/bossm", "items/s/bossh", "items/s/bossgr",
+                                            "items/s/bossgl"};
+        constexpr std::array kShardArchives{"items/s/sm", "items/s/si", "items/s/sc", "items/s/st"};
+        constexpr std::array<u32, 4> kArmorIdentities{0x620, 0x630, 0xa40, 0xa50};
         const usize subtype = reward.subtype - 1;
         const u32 identity = fixture.templateFlags & 0xffffU;
-        if (identity != (reward.kind == 0x2a ? armorIdentities[subtype] : 0x8260U)) {
+        if (identity != (reward.kind == 0x2a ? kArmorIdentities[subtype] : 0x8260U)) {
             throw FormatError("N64 Legends boss: incompatible PPow reward identity");
         }
         // e0064e60's script-created pickups load their own bank on demand.
         // Preload the same bank instead, before the rendering resources freeze.
-        fixture.archive = reward.kind == 0x2a ? armorArchives[subtype] : shardArchives[subtype];
+        fixture.archive = reward.kind == 0x2a ? kArmorArchives[subtype] : kShardArchives[subtype];
         fixture.position = encounter.combat.position;
         fixture.group = "POWERUP";
         fixture.groundProjected = false;

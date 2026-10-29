@@ -21,10 +21,12 @@ void LegendsLevel::affectArea(const ImportedAreaDamage& apply) {
     // prior blast. Their clocks/hit lists remain native; health is always GDL's.
     const auto admit = [&] {
         for (auto& event : m_world.adapter()->takeFixtureEvents()) {
-            m_blasts.emplace_back(std::move(event), m_trapDamageScale);
+            m_blasts.emplace_back(event, m_trapDamageScale);
         }
     };
     admit();
+    // admit() grows m_blasts at the end of each pass, so the index is re-checked.
+    // NOLINTNEXTLINE(modernize-loop-convert)
     for (usize i = 0; i < m_blasts.size(); ++i) {
         auto& blast = m_blasts[i];
         const auto area = blast.step(0);

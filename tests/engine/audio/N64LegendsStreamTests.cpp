@@ -55,14 +55,14 @@ TEST_CASE("N64 native music rewinds and renders independently of read chunk size
     REQUIRE(stream.open(root, 0));
     CHECK(stream.desc().sampleRate == 32000);
     CHECK(stream.desc().channels == 2);
-    constexpr usize frames = 64000;
-    const auto expected = render(stream, frames, 4096);
-    REQUIRE(expected.size() == frames * 2);
+    constexpr usize kFrames = 64000;
+    const auto expected = render(stream, kFrames, 4096);
+    REQUIRE(expected.size() == kFrames * 2);
     CHECK(std::any_of(expected.begin(), expected.end(), [](f32 value) { return value != 0.0f; }));
     for (const usize piece : {1U, 997U, 8191U}) {
         stream.rewind();
         REQUIRE(stream.opened());
-        const auto actual = render(stream, frames, piece);
+        const auto actual = render(stream, kFrames, piece);
         CHECK(std::equal(expected.begin(), expected.end(), actual.begin(), actual.end()));
     }
     std::vector<f32> output{0.25f};
@@ -81,19 +81,19 @@ TEST_CASE("N64 music sources do not share sequencer names or playback state",
     if (!std::filesystem::exists(root)) {
         SKIP("Native N64 music extraction is not installed");
     }
-    constexpr usize frames = 64000;
+    constexpr usize kFrames = 64000;
     N64LegendsStream first;
     REQUIRE(first.open(root, 0));
-    const auto expectedFirst = render(first, frames, 997);
+    const auto expectedFirst = render(first, kFrames, 997);
     N64LegendsStream second;
     REQUIRE(second.open(root, 17));
-    const auto expectedSecond = render(second, frames, 997);
+    const auto expectedSecond = render(second, kFrames, 997);
     first.rewind();
     second.rewind();
     std::vector<f32> actualFirst;
     std::vector<f32> actualSecond;
-    while (actualFirst.size() / 2 < frames) {
-        const usize count = std::min<usize>(997, frames - actualFirst.size() / 2);
+    while (actualFirst.size() / 2 < kFrames) {
+        const usize count = std::min<usize>(997, kFrames - actualFirst.size() / 2);
         REQUIRE(first.read(actualFirst, count));
         REQUIRE(second.read(actualSecond, count));
     }
@@ -103,7 +103,7 @@ TEST_CASE("N64 music sources do not share sequencer names or playback state",
                      actualSecond.end()));
     CHECK_FALSE(first.open(root, 100));
     second.rewind();
-    const auto surviving = render(second, frames, 4096);
+    const auto surviving = render(second, kFrames, 4096);
     CHECK(std::equal(surviving.begin(), surviving.end(), expectedSecond.begin(),
                      expectedSecond.end()));
 }
@@ -115,12 +115,12 @@ TEST_CASE("N64 music bank and song fingerprints reject modified assets",
         SKIP("Native N64 music extraction is not installed");
     }
     const auto destination = test::scratchDirectory("n64-music-modified");
-    constexpr std::array<std::string_view, 5> names{
+    constexpr std::array<std::string_view, 5> kNames{
         "gauntlet.proj", "gauntlet.pool", "gauntlet.sdir", "gauntlet.samp", "mount1.song"};
-    for (const auto name : names) {
+    for (const auto name : kNames) {
         writeFile(destination / name, readFile(source / name));
     }
-    for (const auto name : names) {
+    for (const auto name : kNames) {
         INFO(name);
         auto bytes = readFile(source / name);
         REQUIRE_FALSE(bytes.empty());
@@ -149,7 +149,7 @@ TEST_CASE("Native N64 music follows SoundPlayer music volume and lifetime",
     f64 energy = 0;
     for (usize frame = 0; frame < 120; ++frame) {
         mixer.mix(output);
-        for (f32 sample : output) {
+        for (const f32 sample : output) {
             energy += static_cast<f64>(sample) * sample;
         }
         player.update();
@@ -185,7 +185,7 @@ TEST_CASE("Every native N64 song sequences finite non-silent stereo audio",
         INFO(id);
         N64LegendsStream stream;
         REQUIRE(stream.open(root, id));
-        const auto pcm = render(stream, 32000 * 4, 4096);
+        const auto pcm = render(stream, usize{32000} * 4, 4096);
         CHECK(std::all_of(pcm.begin(), pcm.end(), [](f32 sample) {
             return std::isfinite(sample) && sample >= -1.0f && sample <= 1.0f;
         }));

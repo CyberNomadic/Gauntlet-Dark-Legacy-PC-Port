@@ -90,7 +90,7 @@ WorldLayout WorldLayout::fromDecoded(std::vector<WorldObject> objects,
         for (usize index = 0; index < objects.size(); ++index) {
             auto at = static_cast<s32>(index);
             while (at >= 0 && state[static_cast<usize>(at)] == 0) {
-                const usize slot = static_cast<usize>(at);
+                const auto slot = static_cast<usize>(at);
                 state[slot] = 1;
                 at = parents ? objects[slot].parent : objects[slot].next;
             }
@@ -99,7 +99,7 @@ WorldLayout WorldLayout::fromDecoded(std::vector<WorldObject> objects,
             }
             at = static_cast<s32>(index);
             while (at >= 0 && state[static_cast<usize>(at)] == 1) {
-                const usize slot = static_cast<usize>(at);
+                const auto slot = static_cast<usize>(at);
                 state[slot] = 2;
                 at = parents ? objects[slot].parent : objects[slot].next;
             }

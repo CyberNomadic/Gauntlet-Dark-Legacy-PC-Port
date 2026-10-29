@@ -38,7 +38,8 @@ void LegendsSceneAdapter::bindN64Trap(RenderDevice& device, formats::LegendsN64T
                              definition.activeSequence);
         return;
     }
-    std::optional<usize> starting, ending;
+    std::optional<usize> starting;
+    std::optional<usize> ending;
     if (definition.activeSequence.back() == 'A') {
         auto name = definition.activeSequence;
         name.back() = 'S';
@@ -52,7 +53,7 @@ void LegendsSceneAdapter::bindN64Trap(RenderDevice& device, formats::LegendsN64T
         return animation && animation->frames > 0 ? static_cast<u32>(animation->frames) : 0;
     };
     if (frames(*active) == 0 || (starting && frames(*starting) == 0)) {
-        m_warnings.push_back("Native damaging trap has no valid authored duration.");
+        m_warnings.emplace_back("Native damaging trap has no valid authored duration.");
         return;
     }
     if (!definition.contactNode.empty() &&
@@ -118,7 +119,7 @@ void LegendsSceneAdapter::updateTraps(f32 seconds, bool timeStopped) {
             if (selected) {
                 auto& figure = m_fixtures[*selected];
                 const auto* animation = figure.sequenceInfo(0);
-                figure.play(0, state.phase() == LegendsTrap::Phase::Idle && animation &&
+                figure.play(0, state.phase() == LegendsTrap::Phase::Idle && animation != nullptr &&
                                    animation->repeats);
                 figure.capturePresentation();
             }
@@ -136,7 +137,7 @@ void LegendsSceneAdapter::touchTraps(std::span<const LegendsPortalVisitor> visit
     for (auto& binding : m_traps) {
         for (const auto& visitor : visitors) {
             if (auto hit = binding.state.touch(visitor)) {
-                m_trapHits.push_back(std::move(*hit));
+                m_trapHits.push_back(*hit);
             }
         }
     }

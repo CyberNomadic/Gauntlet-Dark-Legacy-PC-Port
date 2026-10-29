@@ -66,16 +66,16 @@ Chunk chunk(std::span<const u8> bytes, u32 tag, usize stride) {
 
 std::optional<LegendsN64ScrollContext> legendsN64ScrollContext(std::span<const u8> program,
                                                                std::string_view map) {
-    constexpr usize base = 0xe0000400U;
-    constexpr usize realms = 0xe006c360U - base;
-    constexpr usize levels = 0xe006c468U - base;
+    constexpr usize kBase = 0xe0000400U;
+    constexpr usize kRealms = 0xe006c360U - kBase;
+    constexpr usize kLevels = 0xe006c468U - kBase;
     struct Realm {
         char code;
         std::string stem;
     };
     std::map<u32, Realm> names;
     bool terminated = false;
-    for (usize at = realms; at < levels; at += 24) {
+    for (usize at = kRealms; at < kLevels; at += 24) {
         range(program, at, 24);
         const u32 id = readU32BE(program, at);
         if (id == 16) {
@@ -83,17 +83,17 @@ std::optional<LegendsN64ScrollContext> legendsN64ScrollContext(std::span<const u
             break;
         }
         const u32 address = readU32BE(program, at + 8);
-        require(id < 16 && address >= base, "invalid realm");
+        require(id < 16 && address >= kBase, "invalid realm");
         require(names
                     .emplace(id, Realm{static_cast<char>(program[at + 4]),
-                                       stringAt(program, address - base, 33, true)})
+                                       stringAt(program, address - kBase, 33, true)})
                     .second,
                 "duplicate realm");
     }
     require(terminated, "unterminated realm table");
     std::optional<LegendsN64ScrollContext> result;
     for (usize i = 0; i < 128; ++i) {
-        const usize at = levels + i * 40;
+        const usize at = kLevels + i * 40;
         range(program, at, 40);
         const u32 realm = readU32BE(program, at);
         if (realm == 16) {
@@ -102,10 +102,10 @@ std::optional<LegendsN64ScrollContext> legendsN64ScrollContext(std::span<const u
         const auto found = names.find(realm);
         const u32 address = readU32BE(program, at + 12);
         const u32 level = readU32BE(program, at + 4);
-        require(found != names.end() && address >= base && level <= 10, "invalid level");
-        if (toLowerAscii(found->second.stem + stringAt(program, address - base, 33, true)) ==
+        require(found != names.end() && address >= kBase && level <= 10, "invalid level");
+        if (toLowerAscii(found->second.stem + stringAt(program, address - kBase, 33, true)) ==
             toLowerAscii(map)) {
-            // e006ab40 sets the native string base from levelRow+0x26. Advice
+            // e006ab40 sets the native string kBase from levelRow+0x26. Advice
             // uses the internal level ordinal, not the directory's suffix.
             result =
                 LegendsN64ScrollContext{found->second.code, level, readU16BE(program, at + 0x26)};

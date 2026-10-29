@@ -24,7 +24,7 @@ Vec3 partyFeet(std::span<const CameraSubject> subjects) {
 
 LegendsLevel::LegendsLevel(RenderDevice& device, const formats::LegendsMap& map,
                            std::unique_ptr<LegendsSceneAdapter> adapter,
-                           std::filesystem::path directory,
+                           const std::filesystem::path& directory,
                            const std::filesystem::path& characterRoot)
     : m_directory(directory.lexically_normal()) {
     if (m_directory.filename().empty()) {

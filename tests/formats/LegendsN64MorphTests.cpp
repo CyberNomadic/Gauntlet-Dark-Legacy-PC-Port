@@ -57,11 +57,11 @@ TEST_CASE("N64 morph rejects index-heavy amplification before copying any frames
     const std::array<u32, 3> sources{0, 0, 0};
     auto original = triangle();
     original.parts[0].indices.resize(32768, 0); // 128KiB becomes512MiB across the frames.
-    usize vertices = 4096 * 3;
+    usize vertices = usize{4096} * 3;
     usize bytes = kLegendsN64VariantByteLimit;
     CHECK_THROWS_AS(decodeLegendsN64Morph(track, binding, original, sources, vertices, bytes),
                     FormatError);
-    CHECK(vertices == 4096 * 3);
+    CHECK(vertices == usize{4096} * 3);
     CHECK(bytes == kLegendsN64VariantByteLimit);
 }
 
@@ -259,7 +259,7 @@ TEST_CASE("Native explosive barrel breakup decodes packed positions without repl
     if (!std::filesystem::is_regular_file(root / "redbar/seq.wad")) {
         SKIP("Native N64 Legends explosive barrels unavailable");
     }
-    for (const auto bank : {"redbar", "grebar"}) {
+    for (const char* const bank : {"redbar", "grebar"}) {
         CAPTURE(bank);
         const auto sequence = readFile(root / bank / "seq.wad");
         const auto models = decodeLegendsN64Models(readFile(root / bank / "objects.wad"));
@@ -283,7 +283,7 @@ TEST_CASE("Native explosive barrel breakup decodes packed positions without repl
             }
         }
         const auto decoded = decodeLegendsN64Sequences(sequence, models);
-        const auto wanted = std::string_view(bank) == "redbar" ? "TRAP:TBRA" : "TRAP:TBGA";
+        const char* const wanted = std::string_view(bank) == "redbar" ? "TRAP:TBRA" : "TRAP:TBGA";
         const auto tree = std::ranges::find(decoded.animation.trees, wanted, &TreeDefinition::name);
         REQUIRE(tree != decoded.animation.trees.end());
         REQUIRE(tree->nodes.front().objectFrames.size() == 1);

@@ -101,7 +101,7 @@ void LegendsSceneAdapter::updateObelisks() {
         m_hiddenFixtures[obelisk.spentFigure] = false;
         auto& figure = m_fixtures[obelisk.spentFigure];
         const auto* sequence = figure.sequenceInfo(0);
-        figure.play(0, sequence && sequence->repeats);
+        figure.play(0, sequence != nullptr && sequence->repeats);
         figure.capturePresentation();
     }
 }

@@ -108,7 +108,7 @@ Image decode(std::span<const u8> bytes, u32 width, u32 height, u8 format, u8 kin
             if (vq) {
                 const u8 entry = bytes[offset + morton(x / 2, y / 2, width / 2, height / 2)];
                 require(entry < codebook, "VQ index outside compact codebook");
-                pixel = usize{entry} * 8 + ((x & 1U) * 2 + (y & 1U)) * 2;
+                pixel = usize{entry} * 8 + (usize{x & 1U} * 2 + (y & 1U)) * 2;
             } else {
                 const usize slot = kind == 9 ? usize{y} * width + x : morton(x, y, width, height);
                 pixel = offset + slot * 2;
@@ -132,7 +132,7 @@ std::vector<LegendsMapTexture> decodeLegendsDreamcastTextures(std::span<const u8
     range(models, records, count * 80);
     std::vector<LegendsMapTexture> result;
     result.reserve(count);
-    usize remainingBytes = 128 * 1024 * 1024;
+    usize remainingBytes = usize{128} * 1024 * 1024;
     for (usize i = 0; i < count; ++i) {
         const usize at = records + i * 80;
         require(readU16LE(models, at) == 0xff, "invalid Dreamcast bitmap signature");
@@ -178,7 +178,7 @@ std::vector<LegendsMapTexture> decodeLegendsDreamcastTextures(std::span<const u8
             ++length;
         }
         if (result[slot].name.empty()) {
-            result[slot].name.assign(reinterpret_cast<const char*>(models.data() + at), length);
+            result[slot].name.assign(std::bit_cast<const char*>(models.data() + at), length);
         }
     }
     return result;

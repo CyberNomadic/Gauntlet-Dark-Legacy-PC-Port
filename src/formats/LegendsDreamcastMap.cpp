@@ -51,7 +51,7 @@ std::string name(std::span<const u8> bytes, usize offset) {
     while (length < 16 && bytes[offset + length] != 0) {
         ++length;
     }
-    return {reinterpret_cast<const char*>(bytes.data() + offset), length};
+    return {std::bit_cast<const char*>(bytes.data() + offset), length};
 }
 
 Mesh geometry(std::span<const u8> bytes, usize model, usize bitmapCount, usize bitmapRecords,
@@ -168,7 +168,7 @@ Mesh geometry(std::span<const u8> bytes, usize model, usize bitmapCount, usize b
     std::vector<usize> assignedTexture(vertexCount, bitmapCount);
     std::map<std::pair<u32, u32>, u32> splitVertices;
     for (auto& part : mesh.parts) {
-        const usize bitmap = bitmapRecords + part.texture * 80;
+        const usize bitmap = bitmapRecords + static_cast<usize>(part.texture) * 80;
         const u32 width = readU16LE(bytes, bitmap + 4);
         const u32 height = readU16LE(bytes, bitmap + 6);
         require(width <= 1024 && height <= 1024 && std::has_single_bit(width) &&
@@ -432,12 +432,13 @@ LegendsMap LegendsMap::parseDreamcast(std::span<const u8> worlds, std::span<cons
                      remainingVertices, remainingTriangles);
     }
     collisionAndStarts(result, worlds, records, placements);
-    result.warnings.push_back(
+    result.warnings.emplace_back(
         "Native lightmaps and material lighting effects are not implemented.");
     usize borrowedTextures = 0;
     for (usize i = 0; i < bitmapCount; ++i) {
-        borrowedTextures +=
-            (models[kModelHeader + modelCount * kModelStride + i * 80 + 2] & 8U) != 0;
+        if ((models[kModelHeader + modelCount * kModelStride + i * 80 + 2] & 8U) != 0) {
+            ++borrowedTextures;
+        }
     }
     if (borrowedTextures != 0) {
         result.warnings.push_back(

@@ -209,9 +209,9 @@ class GeneratorLevel final : public ImportedLevel {
 public:
     std::vector<ImportedGenerator> roster;
     void capturePresentation() override {}
-    void update(f32, bool) override {}
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
-    }
+    void update(f32 /*seconds*/, bool /*timeStopped*/) override {}
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {}
     std::span<const ImportedGenerator> importedGenerators() const override { return roster; }
 };
 
@@ -259,7 +259,7 @@ TEST_CASE("Imported native generators breed attackable common enemies and award 
     const auto& feedbackRoster = opponents.levelNow()->enemies;
     REQUIRE(feedbackRoster.size() == 1);
     CHECK(feedbackRoster[0].kind == kGruntKind);
-    for (bool killed : {false, true}) {
+    for (const bool killed : {false, true}) {
         EnemyFeedback feedback;
         feedback.kind = kGruntKind;
         feedback.tier = 3;

@@ -134,9 +134,9 @@ bool LevelMessages::openImported(RenderDevice& device, std::span<const std::stri
     if (!m_text.ready() || text.empty() || active()) {
         return false;
     }
-    constexpr f32 scale = .5f;
-    constexpr s32 width = ScrollBox::kMaxWidth - ScrollBox::kMargin;
-    constexpr usize linesPerPage = 9;
+    constexpr f32 kScale = .5f;
+    constexpr s32 kWidth = ScrollBox::kMaxWidth - ScrollBox::kMargin;
+    constexpr usize kLinesPerPage = 9;
     std::vector<std::string> pages;
     std::string page;
     usize lines = 0;
@@ -145,7 +145,7 @@ bool LevelMessages::openImported(RenderDevice& device, std::span<const std::stri
             page += '\n';
         }
         page += line;
-        if (++lines == linesPerPage) {
+        if (++lines == kLinesPerPage) {
             pages.push_back(std::exchange(page, {}));
             lines = 0;
         }
@@ -158,7 +158,8 @@ bool LevelMessages::openImported(RenderDevice& device, std::span<const std::stri
             std::string word;
             std::string line;
             while (words >> word) {
-                if (!line.empty() && m_text.measure(line + " " + word, scale) > width) {
+                if (!line.empty() &&
+                    m_text.measure(std::string(line).append(" ").append(word), kScale) > kWidth) {
                     append(line);
                     line.clear();
                 }
@@ -167,7 +168,7 @@ bool LevelMessages::openImported(RenderDevice& device, std::span<const std::stri
                 }
                 // Malformed overlong tokens still cannot draw outside the parchment.
                 for (const char character : word) {
-                    if (!line.empty() && m_text.measure(line + character, scale) > width) {
+                    if (!line.empty() && m_text.measure(line + character, kScale) > kWidth) {
                         append(line);
                         line.clear();
                     }
@@ -187,7 +188,7 @@ bool LevelMessages::openImported(RenderDevice& device, std::span<const std::stri
         return false;
     }
     const bool opened =
-        m_scroll.open(device, std::move(pages), scale,
+        m_scroll.open(device, std::move(pages), kScale,
                       strings ? std::string(strings->get("scroll.pressButton")) : std::string{});
     if (opened) {
         m_sim.message.reset();

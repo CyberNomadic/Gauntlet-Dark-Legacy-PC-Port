@@ -168,9 +168,9 @@ void LegendsTraversal::step(const MoveInput& input, f32 cameraYaw, f32 seconds,
     // backwards than its intended step. Exploration has no external pushes:
     // conservatively refuse that step instead of oscillating across the edge.
     // Keep this adapter guard separate from the retail movement implementation.
-    constexpr f32 margin = 0.001f;
-    if (glm::length(displacement) > glm::length(requested) + margin ||
-        glm::dot(displacement, requested) < -margin * glm::length(requested)) {
+    constexpr f32 kMargin = 0.001f;
+    if (glm::length(displacement) > glm::length(requested) + kMargin ||
+        glm::dot(displacement, requested) < -kMargin * glm::length(requested)) {
         const f32 facing = m_actor.yaw();
         m_actor = before;
         m_actor.turnTo(facing);
@@ -192,7 +192,7 @@ bool LegendsTraversal::correctSceneryStep(const PlayerActor& before, const Vec3&
 bool correctImportedSceneryStep(PlayerActor& actor, const PlayerActor& before,
                                 const WorldCollision& collision, const Vec3& correctedPosition,
                                 f32 seconds) {
-    constexpr f32 margin = 0.001f;
+    constexpr f32 kMargin = 0.001f;
     const f32 facing = actor.yaw();
     const auto refuse = [&] {
         CharacterSave save = std::move(actor.save());
@@ -205,7 +205,7 @@ bool correctImportedSceneryStep(PlayerActor& actor, const PlayerActor& before,
     };
     if (!validPosition(correctedPosition) || !std::isfinite(seconds) || seconds <= 0 ||
         seconds > 0.1f || !std::isfinite(facing) ||
-        std::abs(correctedPosition.y - actor.position().y) > margin) {
+        std::abs(correctedPosition.y - actor.position().y) > kMargin) {
         return refuse();
     }
     const Vec2 offset{correctedPosition.x - before.position().x,
@@ -213,7 +213,7 @@ bool correctImportedSceneryStep(PlayerActor& actor, const PlayerActor& before,
     const Vec2 original{actor.position().x - before.position().x,
                         actor.position().z - before.position().z};
     const f32 distance = glm::length(offset);
-    if (distance > glm::length(original) + margin) {
+    if (distance > glm::length(original) + kMargin) {
         return refuse();
     }
     const Vec3 centre = before.followPoint() + Vec3{0, PlayerActor::kWallSphereLift, 0};
@@ -244,14 +244,14 @@ bool correctImportedSceneryStep(PlayerActor& actor, const PlayerActor& before,
         candidate.update({}, 0, seconds, &collision, 1, true);
     }
     const Vec2 reached{candidate.position().x, candidate.position().z};
-    if (glm::distance(reached, Vec2{correctedPosition.x, correctedPosition.z}) > margin) {
+    if (glm::distance(reached, Vec2{correctedPosition.x, correctedPosition.z}) > kMargin) {
         return refuse();
     }
     candidate.fall(seconds, collision);
     const Vec3 endCentre = candidate.followPoint() + Vec3{0, PlayerActor::kWallSphereLift, 0};
     if (!validPosition(candidate.position()) ||
         collision.sweepSphere(centre, endCentre, candidate.reach()) ||
-        glm::distance(collision.resolveSphere(endCentre, candidate.reach()), endCentre) > margin) {
+        glm::distance(collision.resolveSphere(endCentre, candidate.reach()), endCentre) > kMargin) {
         return refuse();
     }
     actor = std::move(candidate);

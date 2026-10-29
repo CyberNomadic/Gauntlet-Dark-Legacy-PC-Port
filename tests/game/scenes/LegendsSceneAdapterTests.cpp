@@ -157,7 +157,9 @@ TEST_CASE("Tower2 animates only its authored scrolling and borrowed fire texture
     for (usize i = 0; i < map.objects.size(); ++i) {
         const bool visible = scene->worldObjectVisible(i);
         CHECK(visible == (map.objects[i].name != "CATH_BEAM"));
-        hidden += !visible;
+        if (!visible) {
+            ++hidden;
+        }
     }
     CHECK(hidden == 1);
     for (const auto& warning : scene->warnings()) {

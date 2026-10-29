@@ -56,7 +56,7 @@ struct LegendsN64Templates {
     std::span<const u8> randoms;
 };
 
-std::vector<LegendsN64Fixture> decodeLegendsN64Fixtures(std::span<const u8> placements,
+std::vector<LegendsN64Fixture> decodeLegendsN64Fixtures(std::span<const u8> bytes,
                                                         const LegendsN64Templates& templates,
                                                         u8 activationThreshold = 1);
 
@@ -81,7 +81,7 @@ struct LegendsN64Model {
     /** Authored (ENV-PRIM)*TEXEL0+PRIM, alpha=TEXEL0.a. These parts do not use SHADE. */
     std::vector<LegendsN64ColorRamp> colorRamps;
 };
-std::vector<LegendsN64Model> decodeLegendsN64Models(std::span<const u8> objects);
+std::vector<LegendsN64Model> decodeLegendsN64Models(std::span<const u8> bytes);
 
 struct LegendsN64Sequences {
     AnimationFile animation;
@@ -95,7 +95,7 @@ struct LegendsN64Sequences {
 /** One tree per native group/sequence pair, named group + ':' + FOURCC.
  * Optional dynseq.rom supplies the archive's externally streamed SLST records.
  * Unsupported native tracks are reported, never reinterpreted as GameCube tracks. */
-LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> sequences,
+LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
                                               std::span<const LegendsN64Model> models,
                                               std::span<const u8> program = {},
                                               std::span<const u8> dynamicSequences = {});

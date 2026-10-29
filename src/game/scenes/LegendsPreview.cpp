@@ -71,12 +71,14 @@ void LegendsPreview::open(RenderDevice& device, const formats::LegendsMap& map,
                 texture = surfaces[part.texture].texture.get();
             }
             if (texture) {
-                uvScale = Vec2{1.0f / texture->width(), 1.0f / texture->height()};
+                uvScale = Vec2{1.0f / static_cast<f32>(texture->width()),
+                               1.0f / static_cast<f32>(texture->height())};
             }
             if (part.texture < map.textures.size()) {
                 const auto& source = map.textures[part.texture];
                 if (source.width != 0 && source.height != 0) {
-                    uvScale = Vec2{1.0f / source.width, 1.0f / source.height};
+                    uvScale = Vec2{1.0f / static_cast<f32>(source.width),
+                                   1.0f / static_cast<f32>(source.height)};
                 }
             }
             for (const auto index : part.indices) {

@@ -91,7 +91,7 @@ void LegendsSceneAdapter::selectFloorOutcome(usize index) {
     if (outcome->figure) {
         auto& figure = m_fixtures[*outcome->figure];
         const auto* animation = figure.sequenceInfo(0);
-        figure.play(0, animation && animation->repeats);
+        figure.play(0, animation != nullptr && animation->repeats);
         figure.capturePresentation();
         m_hiddenFixtures[*outcome->figure] = false;
         m_pickupFigures[binding.pickup] = *outcome->figure;
@@ -249,7 +249,7 @@ void LegendsSceneAdapter::bindN64Container(RenderDevice& device,
                     figure = index;
                     m_hiddenFixtures[figure] = true;
                     const auto* animation = m_fixtures[figure].sequenceInfo(0);
-                    m_fixtures[figure].play(0, animation && animation->repeats);
+                    m_fixtures[figure].play(0, animation != nullptr && animation->repeats);
                 } else {
                     // Retain no invisible collectible when its native figure is absent.
                     pickup.reset();
@@ -275,7 +275,7 @@ void LegendsSceneAdapter::bindN64Container(RenderDevice& device,
                 m_pickupFigures.push_back(figure);
             }
         }
-        binding.outcomes.push_back(std::move(outcome));
+        binding.outcomes.push_back(outcome);
     }
     if (!binding.selector && !binding.outcomes.empty()) {
         binding.openingFigure = binding.outcomes.front().openingFigure;
@@ -328,7 +328,7 @@ std::vector<Obstacle> LegendsSceneAdapter::containerObstacles() const {
     }
     for (const auto& container : m_containers) {
         if (auto box = container.state.obstacle(); box.solid) {
-            result.push_back(std::move(box));
+            result.push_back(box);
         }
     }
     return result;

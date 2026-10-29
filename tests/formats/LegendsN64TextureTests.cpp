@@ -41,7 +41,7 @@ struct TextureFixture {
     usize directory = 0;
 
     explicit TextureFixture(u8 format, u8 size, usize pixelBytes = 520)
-        : bytes(kPixels + pixelBytes + 4 * 12), directory(kPixels + pixelBytes) {
+        : bytes(kPixels + pixelBytes + usize{4} * 12), directory(kPixels + pixelBytes) {
         put32(bytes, 0, static_cast<u32>(directory));
         put32(bytes, 4, 4);
         put32(bytes, kHeader, 0);
@@ -80,25 +80,25 @@ struct ScrollFixture {
         const auto oldDirectory = texture.directory;
         const std::vector<u8> entries(
             texture.bytes.begin() + static_cast<std::ptrdiff_t>(oldDirectory), texture.bytes.end());
-        texture.bytes.resize(directory + 5 * 12);
+        texture.bytes.resize(directory + usize{5} * 12);
         std::fill(texture.bytes.begin() + static_cast<std::ptrdiff_t>(scroll), texture.bytes.end(),
                   0);
         std::copy(entries.begin(), entries.end(),
                   texture.bytes.begin() + static_cast<std::ptrdiff_t>(directory));
         put32(texture.bytes, 0, static_cast<u32>(directory));
         put32(texture.bytes, 4, 5);
-        const auto entry = directory + 4 * 12;
+        const auto entry = directory + usize{4} * 12;
         const std::string_view tag = "TSCR";
         std::copy(tag.begin(), tag.end(),
                   texture.bytes.begin() + static_cast<std::ptrdiff_t>(entry));
         put32(texture.bytes, entry + 4, static_cast<u32>(scroll));
         put32(texture.bytes, entry + 8, 1);
-        put16(texture.bytes, texture.kHeader + 12, 64);
-        put16(texture.bytes, texture.kHeader + 14, 32);
-        put32(texture.bytes, texture.kLoader + 16, 0xF2000000);
-        put32(texture.bytes, texture.kLoader + 20, 0x000FC07C);
-        put32(texture.bytes, texture.kLoader + 24, 0xDF000000);
-        put32(texture.bytes, scroll, texture.kLoader + 16);
+        put16(texture.bytes, TextureFixture::kHeader + 12, 64);
+        put16(texture.bytes, TextureFixture::kHeader + 14, 32);
+        put32(texture.bytes, TextureFixture::kLoader + 16, 0xF2000000);
+        put32(texture.bytes, TextureFixture::kLoader + 20, 0x000FC07C);
+        put32(texture.bytes, TextureFixture::kLoader + 24, 0xDF000000);
+        put32(texture.bytes, scroll, TextureFixture::kLoader + 16);
         rate(0, 0.3f);
         rate(1, -1.0f);
     }
@@ -120,7 +120,7 @@ TEST_CASE("Legends N64 TSCR records preserve native rates phases and target tile
     const auto before = fixture.texture.bytes;
     const auto scroll = fixture.decode();
     CHECK(scroll.texture == 0);
-    CHECK(scroll.commandOffset == fixture.texture.kLoader + 16);
+    CHECK(scroll.commandOffset == TextureFixture::kLoader + 16);
     CHECK(scroll.width == 64);
     CHECK(scroll.height == 32);
     CHECK(scroll.texelsPerTick.x == Catch::Approx(0.3f));
@@ -128,7 +128,7 @@ TEST_CASE("Legends N64 TSCR records preserve native rates phases and target tile
     CHECK(scroll.initialPhase[0] == -7);
     CHECK(scroll.initialPhase[1] == 9);
     CHECK(scroll.reserved == 0x1234);
-    LegendsN64TextureScrollState state(scroll);
+    const LegendsN64TextureScrollState state(scroll);
     CHECK(state.offset(scroll).x == Catch::Approx(0.25f / 64.0f));
     CHECK(state.offset(scroll).y == Catch::Approx(-0.25f / 32.0f));
     CHECK(fixture.texture.bytes == before);
@@ -183,31 +183,31 @@ TEST_CASE("Legends N64 scrolling rejects malformed native bindings",
         put16(fixture.texture.bytes, fixture.scroll + 12, 1);
     }
     SECTION("truncated scroll") {
-        put32(fixture.texture.bytes, fixture.directory + 4 * 12 + 8, 2);
+        put32(fixture.texture.bytes, fixture.directory + usize{4} * 12 + 8, 2);
     }
     SECTION("nonfinite speed") {
         fixture.rate(1, std::numeric_limits<f32>::infinity());
     }
     SECTION("invalid signed phase range") {
-        put16(fixture.texture.bytes, fixture.texture.kHeader + 12, 2048);
+        put16(fixture.texture.bytes, TextureFixture::kHeader + 12, 2048);
     }
     SECTION("zero texture extent") {
-        put16(fixture.texture.bytes, fixture.texture.kHeader + 12, 0);
+        put16(fixture.texture.bytes, TextureFixture::kHeader + 12, 0);
     }
     SECTION("speed exceeds a tile") {
         fixture.rate(0, 65.0f);
     }
     SECTION("outside loader") {
-        put32(fixture.texture.bytes, fixture.scroll, fixture.texture.kPixels);
+        put32(fixture.texture.bytes, fixture.scroll, TextureFixture::kPixels);
     }
     SECTION("unaligned command") {
-        put32(fixture.texture.bytes, fixture.scroll, fixture.texture.kLoader + 17);
+        put32(fixture.texture.bytes, fixture.scroll, TextureFixture::kLoader + 17);
     }
     SECTION("wrong command") {
-        put32(fixture.texture.bytes, fixture.texture.kLoader + 16, 0xDF000000);
+        put32(fixture.texture.bytes, TextureFixture::kLoader + 16, 0xDF000000);
     }
     SECTION("load tile instead of render tile") {
-        put32(fixture.texture.bytes, fixture.texture.kLoader + 20, 0x070FC07C);
+        put32(fixture.texture.bytes, TextureFixture::kLoader + 20, 0x070FC07C);
     }
     CHECK_THROWS_AS(fixture.decode(), FormatError);
 }
@@ -262,8 +262,8 @@ TEST_CASE("Legends N64 native direct-color textures preserve color and alpha",
           "[formats][legends][texture]") {
     SECTION("RGBA5551") {
         TextureFixture fixture(0, 2);
-        put16(fixture.bytes, fixture.kPixels, 0xF801);
-        put16(fixture.bytes, fixture.kPixels + 2, 0x07C0);
+        put16(fixture.bytes, TextureFixture::kPixels, 0xF801);
+        put16(fixture.bytes, TextureFixture::kPixels + 2, 0x07C0);
         const auto texture = fixture.decode();
         CHECK(texture.name == "A");
         CHECK(texture.image.pixel(0, 0) == Color::rgba(255, 0, 0, 255));
@@ -272,8 +272,8 @@ TEST_CASE("Legends N64 native direct-color textures preserve color and alpha",
     }
     SECTION("RGBA8888") {
         TextureFixture fixture(0, 3);
-        put32(fixture.bytes, fixture.kPixels, 0x12345678);
-        put32(fixture.bytes, fixture.kPixels + 4, 0xABCDEF00);
+        put32(fixture.bytes, TextureFixture::kPixels, 0x12345678);
+        put32(fixture.bytes, TextureFixture::kPixels + 4, 0xABCDEF00);
         const auto before = fixture.bytes;
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(0x12, 0x34, 0x56, 0x78));
@@ -282,37 +282,37 @@ TEST_CASE("Legends N64 native direct-color textures preserve color and alpha",
     }
     SECTION("IA8") {
         TextureFixture fixture(3, 1);
-        fixture.bytes[fixture.kPixels] = 0x8F;
-        fixture.bytes[fixture.kPixels + 1] = 0xA4;
+        fixture.bytes[TextureFixture::kPixels] = 0x8F;
+        fixture.bytes[TextureFixture::kPixels + 1] = 0xA4;
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(136, 136, 136, 255));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(170, 170, 170, 68));
     }
     SECTION("IA4") {
         TextureFixture fixture(3, 0);
-        fixture.bytes[fixture.kPixels] = 0x5C;
+        fixture.bytes[TextureFixture::kPixels] = 0x5C;
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(73, 73, 73, 255));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(219, 219, 219, 0));
     }
     SECTION("IA16") {
         TextureFixture fixture(3, 2);
-        put32(fixture.bytes, fixture.kPixels, 0x12345678);
+        put32(fixture.bytes, TextureFixture::kPixels, 0x12345678);
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(0x12, 0x12, 0x12, 0x34));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(0x56, 0x56, 0x56, 0x78));
     }
     SECTION("I8") {
         TextureFixture fixture(4, 1);
-        fixture.bytes[fixture.kPixels] = 0x21;
-        fixture.bytes[fixture.kPixels + 1] = 0xF8;
+        fixture.bytes[TextureFixture::kPixels] = 0x21;
+        fixture.bytes[TextureFixture::kPixels + 1] = 0xF8;
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(0x21, 0x21, 0x21, 0x21));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(0xF8, 0xF8, 0xF8, 0xF8));
     }
     SECTION("I4") {
         TextureFixture fixture(4, 0);
-        fixture.bytes[fixture.kPixels] = 0xF7;
+        fixture.bytes[TextureFixture::kPixels] = 0xF7;
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(255, 255, 255, 255));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(119, 119, 119, 119));
@@ -323,7 +323,7 @@ TEST_CASE("Legends N64 extended intensity formats retain native material-indepen
           "[formats][legends][texture]") {
     SECTION("native format six is I4") {
         TextureFixture fixture(6, 0);
-        fixture.bytes[fixture.kPixels] = 0xA5;
+        fixture.bytes[TextureFixture::kPixels] = 0xA5;
         const auto texture = fixture.decode();
         CHECK(texture.format == 6);
         CHECK(texture.image.pixel(0, 0) == Color::rgba(170, 170, 170, 170));
@@ -331,8 +331,8 @@ TEST_CASE("Legends N64 extended intensity formats retain native material-indepen
     }
     SECTION("native format seven is IA8") {
         TextureFixture fixture(7, 1);
-        fixture.bytes[fixture.kPixels] = 0x8F;
-        fixture.bytes[fixture.kPixels + 1] = 0xA4;
+        fixture.bytes[TextureFixture::kPixels] = 0x8F;
+        fixture.bytes[TextureFixture::kPixels + 1] = 0xA4;
         const auto texture = fixture.decode();
         CHECK(texture.format == 7);
         CHECK(texture.image.pixel(0, 0) == Color::rgba(136, 136, 136, 255));
@@ -343,19 +343,19 @@ TEST_CASE("Legends N64 extended intensity formats retain native material-indepen
 TEST_CASE("Legends N64 paired CI8 palette alpha retains all four authored levels",
           "[formats][legends][texture]") {
     TextureFixture fixture(5, 1);
-    put16(fixture.bytes, fixture.kHeader + 12, 4);
+    put16(fixture.bytes, TextureFixture::kHeader + 12, 4);
     // High nibble supplies A1; the full index supplies RGB and A0.
-    constexpr std::array<u8, 4> indices{0x10, 0x20, 0x30, 0x40};
-    std::copy(indices.begin(), indices.end(), fixture.bytes.begin() + fixture.kPixels);
-    const auto palette = fixture.kPixels + 8;
-    put16(fixture.bytes, palette + 1 * 2, 0);
-    put16(fixture.bytes, palette + 2 * 2, 1);
-    put16(fixture.bytes, palette + 3 * 2, 0);
-    put16(fixture.bytes, palette + 4 * 2, 1);
-    put16(fixture.bytes, palette + 0x10 * 2, 0xF800);
-    put16(fixture.bytes, palette + 0x20 * 2, 0xF800);
-    put16(fixture.bytes, palette + 0x30 * 2, 0xF801);
-    put16(fixture.bytes, palette + 0x40 * 2, 0xF801);
+    constexpr std::array<u8, 4> kIndices{0x10, 0x20, 0x30, 0x40};
+    std::copy(kIndices.begin(), kIndices.end(), fixture.bytes.begin() + TextureFixture::kPixels);
+    const auto palette = TextureFixture::kPixels + 8;
+    put16(fixture.bytes, palette + usize{1} * 2, 0);
+    put16(fixture.bytes, palette + usize{2} * 2, 1);
+    put16(fixture.bytes, palette + usize{3} * 2, 0);
+    put16(fixture.bytes, palette + usize{4} * 2, 1);
+    put16(fixture.bytes, palette + usize{0x10} * 2, 0xF800);
+    put16(fixture.bytes, palette + usize{0x20} * 2, 0xF800);
+    put16(fixture.bytes, palette + usize{0x30} * 2, 0xF801);
+    put16(fixture.bytes, palette + usize{0x40} * 2, 0xF801);
     const auto texture = fixture.decode();
     CHECK(texture.format == 5);
     for (u32 i = 0; i < 4; ++i) {
@@ -366,9 +366,9 @@ TEST_CASE("Legends N64 paired CI8 palette alpha retains all four authored levels
 TEST_CASE("Legends N64 CI textures resolve native RGBA16 palettes", "[formats][legends][texture]") {
     SECTION("CI4 palette follows allocated pixel storage") {
         TextureFixture fixture(2, 0);
-        fixture.bytes[fixture.kPixels] = 0x12;
-        put16(fixture.bytes, fixture.kPixels + 8 + 2, 0xF801);
-        put16(fixture.bytes, fixture.kPixels + 8 + 4, 0x003F);
+        fixture.bytes[TextureFixture::kPixels] = 0x12;
+        put16(fixture.bytes, TextureFixture::kPixels + 8 + 2, 0xF801);
+        put16(fixture.bytes, TextureFixture::kPixels + 8 + 4, 0x003F);
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(255, 0, 0, 255));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(0, 0, 255, 255));
@@ -376,21 +376,21 @@ TEST_CASE("Legends N64 CI textures resolve native RGBA16 palettes", "[formats][l
     }
     SECTION("CI8 palette uses all 256 indices") {
         TextureFixture fixture(2, 1);
-        fixture.bytes[fixture.kPixels] = 255;
-        fixture.bytes[fixture.kPixels + 1] = 128;
-        put16(fixture.bytes, fixture.kPixels + 8 + 255 * 2, 0xFFFF);
-        put16(fixture.bytes, fixture.kPixels + 8 + 128 * 2, 0x07C1);
+        fixture.bytes[TextureFixture::kPixels] = 255;
+        fixture.bytes[TextureFixture::kPixels + 1] = 128;
+        put16(fixture.bytes, TextureFixture::kPixels + 8 + usize{255} * 2, 0xFFFF);
+        put16(fixture.bytes, TextureFixture::kPixels + 8 + usize{128} * 2, 0x07C1);
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(255, 255, 255, 255));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(0, 255, 0, 255));
     }
     SECTION("a texture strip reuses the parent palette selected by its loader") {
         TextureFixture fixture(2, 0);
-        fixture.bytes[fixture.kPixels] = 0x11;
-        put32(fixture.bytes, fixture.kLoader + 16, 0xFD100000);
-        put32(fixture.bytes, fixture.kLoader + 20, 64);
-        put32(fixture.bytes, fixture.kLoader + 24, 0xDF000000);
-        put16(fixture.bytes, fixture.kPixels + 64 + 2, 0xFFC1);
+        fixture.bytes[TextureFixture::kPixels] = 0x11;
+        put32(fixture.bytes, TextureFixture::kLoader + 16, 0xFD100000);
+        put32(fixture.bytes, TextureFixture::kLoader + 20, 64);
+        put32(fixture.bytes, TextureFixture::kLoader + 24, 0xDF000000);
+        put16(fixture.bytes, TextureFixture::kPixels + 64 + 2, 0xFFC1);
         const auto texture = fixture.decode();
         CHECK(texture.image.pixel(0, 0) == Color::rgba(255, 255, 0, 255));
         CHECK(texture.image.pixel(1, 0) == Color::rgba(255, 255, 0, 255));
@@ -401,15 +401,15 @@ TEST_CASE("Legends N64 texture loaders supply clamp modes without rewriting nati
           "[formats][legends][texture]") {
     TextureFixture fixture(0, 3);
     SECTION("ordinary display list") {
-        put32(fixture.bytes, fixture.kLoader + 12, 0x200);
+        put32(fixture.bytes, TextureFixture::kLoader + 12, 0x200);
         const auto texture = fixture.decode();
         CHECK(texture.clampU);
         CHECK_FALSE(texture.clampV);
     }
     SECTION("compact template display list") {
-        put32(fixture.bytes, fixture.kHeader + 8, 0x18000005);
-        put32(fixture.bytes, fixture.kLoader, 0xDB060030);
-        put32(fixture.bytes, fixture.kLoader + 8, 0xE0020135);
+        put32(fixture.bytes, TextureFixture::kHeader + 8, 0x18000005);
+        put32(fixture.bytes, TextureFixture::kLoader, 0xDB060030);
+        put32(fixture.bytes, TextureFixture::kLoader + 8, 0xE0020135);
         const auto texture = fixture.decode();
         CHECK(texture.clampU);
         CHECK(texture.clampV);
@@ -421,10 +421,10 @@ TEST_CASE("Legends N64 borrowed and dynamic textures retain their native slot",
           "[formats][legends][texture]") {
     TextureFixture fixture(0, 3);
     SECTION("borrowed texture") {
-        put32(fixture.bytes, fixture.kHeader, 0xFFFFFFFE);
+        put32(fixture.bytes, TextureFixture::kHeader, 0xFFFFFFFE);
     }
     SECTION("missing texdyn data") {
-        put32(fixture.bytes, fixture.kHeader + 8, 0x80);
+        put32(fixture.bytes, TextureFixture::kHeader + 8, 0x80);
     }
     const auto texture = fixture.decode();
     CHECK(texture.external);
@@ -436,7 +436,7 @@ TEST_CASE("Legends N64 borrowed and dynamic textures retain their native slot",
 TEST_CASE("Legends N64 dynamic texture pixels are resolved from texdyn only when supplied",
           "[formats][legends][texture]") {
     TextureFixture fixture(0, 3);
-    put32(fixture.bytes, fixture.kHeader + 8, 0x80);
+    put32(fixture.bytes, TextureFixture::kHeader + 8, 0x80);
     const std::array<u8, 8> dynamic{1, 2, 3, 255, 4, 5, 6, 255};
     const auto texture = decodeLegendsN64Textures(fixture.bytes, dynamic).at(0);
     CHECK_FALSE(texture.external);
@@ -446,11 +446,11 @@ TEST_CASE("Legends N64 dynamic texture pixels are resolved from texdyn only when
 TEST_CASE("Legends N64 streamed palettes use their frame-relative segment address",
           "[formats][legends][texture]") {
     TextureFixture fixture(2, 1);
-    put32(fixture.bytes, fixture.kHeader, 16);
-    put32(fixture.bytes, fixture.kHeader + 8, 0x80);
-    put32(fixture.bytes, fixture.kLoader + 16, 0xFD100000);
-    put32(fixture.bytes, fixture.kLoader + 20, 0x0C000008);
-    put32(fixture.bytes, fixture.kLoader + 24, 0xDF000000);
+    put32(fixture.bytes, TextureFixture::kHeader, 16);
+    put32(fixture.bytes, TextureFixture::kHeader + 8, 0x80);
+    put32(fixture.bytes, TextureFixture::kLoader + 16, 0xFD100000);
+    put32(fixture.bytes, TextureFixture::kLoader + 20, 0x0C000008);
+    put32(fixture.bytes, TextureFixture::kLoader + 24, 0xDF000000);
     std::vector<u8> dynamic(16 + 8 + 512);
     dynamic[16] = 1;
     dynamic[17] = 2;
@@ -466,9 +466,9 @@ TEST_CASE("Legends N64 streamed palettes use their frame-relative segment addres
 TEST_CASE("Legends N64 drawable palettes remain external instead of choosing a player colour",
           "[formats][legends][texture]") {
     TextureFixture fixture(2, 1);
-    put32(fixture.bytes, fixture.kLoader + 16, 0xFD100000);
-    put32(fixture.bytes, fixture.kLoader + 20, 0x0A000000);
-    put32(fixture.bytes, fixture.kLoader + 24, 0xDF000000);
+    put32(fixture.bytes, TextureFixture::kLoader + 16, 0xFD100000);
+    put32(fixture.bytes, TextureFixture::kLoader + 20, 0x0A000000);
+    put32(fixture.bytes, TextureFixture::kLoader + 24, 0xDF000000);
     const auto texture = fixture.decode();
     CHECK(texture.external);
     CHECK(texture.externalPalette);
@@ -485,51 +485,51 @@ TEST_CASE("Legends N64 texture decoder rejects malformed records", "[formats][le
         put32(fixture.bytes, fixture.directory + 8, 2);
     }
     SECTION("pixel section overlaps directory") {
-        put32(fixture.bytes, fixture.directory + 3 * 12 + 8, 10000);
+        put32(fixture.bytes, fixture.directory + usize{3} * 12 + 8, 10000);
     }
     SECTION("missing name terminator") {
-        std::fill(fixture.bytes.begin() + fixture.kName, fixture.bytes.begin() + fixture.kLoader,
-                  u8{'A'});
+        std::fill(fixture.bytes.begin() + TextureFixture::kName,
+                  fixture.bytes.begin() + TextureFixture::kLoader, u8{'A'});
     }
     SECTION("name offset outside NAME") {
-        put16(fixture.bytes, fixture.kHeader + 20, 200);
+        put16(fixture.bytes, TextureFixture::kHeader + 20, 200);
     }
     SECTION("unsupported format") {
-        fixture.bytes[fixture.kHeader + 18] = 1;
+        fixture.bytes[TextureFixture::kHeader + 18] = 1;
     }
     SECTION("unsupported extended size") {
-        fixture.bytes[fixture.kHeader + 18] = 5;
+        fixture.bytes[TextureFixture::kHeader + 18] = 5;
     }
     SECTION("pixels exceed their own allocation") {
-        put16(fixture.bytes, fixture.kHeader + 16, 0);
+        put16(fixture.bytes, TextureFixture::kHeader + 16, 0);
     }
     SECTION("zero dimension") {
-        put16(fixture.bytes, fixture.kHeader + 12, 0);
+        put16(fixture.bytes, TextureFixture::kHeader + 12, 0);
     }
     SECTION("oversized dimension") {
-        put16(fixture.bytes, fixture.kHeader + 12, 65535);
+        put16(fixture.bytes, TextureFixture::kHeader + 12, 65535);
     }
     SECTION("pixel offset outside TEXR") {
-        put32(fixture.bytes, fixture.kHeader, 10000);
+        put32(fixture.bytes, TextureFixture::kHeader, 10000);
     }
     SECTION("loader address outside TXLD") {
-        put32(fixture.bytes, fixture.kHeader + 4, fixture.kPixels);
+        put32(fixture.bytes, TextureFixture::kHeader + 4, TextureFixture::kPixels);
     }
     SECTION("unterminated loader") {
-        std::fill(fixture.bytes.begin() + fixture.kLoader, fixture.bytes.begin() + fixture.kPixels,
-                  0);
+        std::fill(fixture.bytes.begin() + TextureFixture::kLoader,
+                  fixture.bytes.begin() + TextureFixture::kPixels, 0);
     }
     SECTION("truncated palette") {
-        fixture.bytes[fixture.kHeader + 18] = 2;
-        fixture.bytes[fixture.kHeader + 19] = 1;
-        put32(fixture.bytes, fixture.kHeader, 8);
+        fixture.bytes[TextureFixture::kHeader + 18] = 2;
+        fixture.bytes[TextureFixture::kHeader + 19] = 1;
+        put32(fixture.bytes, TextureFixture::kHeader, 8);
     }
     SECTION("unsupported palette segment") {
-        fixture.bytes[fixture.kHeader + 18] = 2;
-        fixture.bytes[fixture.kHeader + 19] = 1;
-        put32(fixture.bytes, fixture.kLoader + 16, 0xFD100000);
-        put32(fixture.bytes, fixture.kLoader + 20, 0x0B000000);
-        put32(fixture.bytes, fixture.kLoader + 24, 0xDF000000);
+        fixture.bytes[TextureFixture::kHeader + 18] = 2;
+        fixture.bytes[TextureFixture::kHeader + 19] = 1;
+        put32(fixture.bytes, TextureFixture::kLoader + 16, 0xFD100000);
+        put32(fixture.bytes, TextureFixture::kLoader + 20, 0x0B000000);
+        put32(fixture.bytes, TextureFixture::kLoader + 24, 0xDF000000);
     }
     REQUIRE_THROWS_AS(fixture.decode(), FormatError);
 }
@@ -771,7 +771,7 @@ TEST_CASE("Native barrel fire and poison effects use their authored RDP color ra
     CHECK(models.at(9).colorRamps[0].environment == Color::rgba(64, 255, 64, 255));
     resolveLegendsN64ColorRamps(models, textures, decoded.animation);
     CHECK(textures.at(81).image.pixels == originalFire);
-    for (const auto sequence : {"WEAPONS:FBAL", "WEAPONS:PBAL"}) {
+    for (const char* const sequence : {"WEAPONS:FBAL", "WEAPONS:PBAL"}) {
         CAPTURE(sequence);
         const bool fire = std::string_view(sequence) == "WEAPONS:FBAL";
         const auto tree =

@@ -70,8 +70,7 @@ std::unique_ptr<SoundPlayer> openLegendsMusic(const std::filesystem::path& level
 }
 } // namespace
 
-std::vector<LegendsMapEntry> Gauntlet::legendsMapsOf(LegendsPlatform platform,
-                                                     bool rescan) const {
+std::vector<LegendsMapEntry> Gauntlet::legendsMapsOf(LegendsPlatform platform, bool rescan) const {
     auto& found = m_legendsMaps[platform == LegendsPlatform::N64 ? 0 : 1];
     if (rescan || !found.has_value()) {
         found = legendsMaps(platform, m_options.unpackedDirectory, paths::executableDirectory(),
@@ -132,8 +131,8 @@ void Gauntlet::consoleLegendsOpen(DevConsole& console, LegendsPlatform platform,
     const auto* imported = m_play->world.imported();
     const auto nativeDeparture = imported ? imported->departure() : std::nullopt;
     const bool internalTravel =
-        completedTravel && imported && imported->travelRequested() && m_play->scene.leaving() &&
-        m_play->scene.transition().covering() &&
+        completedTravel && imported != nullptr && imported->travelRequested() &&
+        m_play->scene.leaving() && m_play->scene.transition().covering() &&
         (nativeDeparture ? nativeDeparture->finished : m_play->scene.departure().finished());
     if (completedTravel && !internalTravel) {
         console.print("The native departure has not finished.");
@@ -175,7 +174,7 @@ void Gauntlet::consoleLegendsOpen(DevConsole& console, LegendsPlatform platform,
                 map.textures =
                     formats::decodeLegendsDreamcastTextures(modelBytes, readFile(*pixels));
             } else {
-                map.warnings.push_back("textures.rom is missing; showing untextured geometry.");
+                map.warnings.emplace_back("textures.rom is missing; showing untextured geometry.");
             }
         }
         auto adapter = LegendsSceneAdapter::load(
@@ -212,7 +211,8 @@ void Gauntlet::consoleLegendsOpen(DevConsole& console, LegendsPlatform platform,
             LegendsTraversal entrance;
             entrance.open(map, selected->player, selected->save,
                           classes.stats(selected->save.character));
-            Vec3 low = entrance.start(), high = low;
+            Vec3 low = entrance.start();
+            Vec3 high = low;
             for (const auto& face : map.collision) {
                 for (const auto& vertex : face.vertices) {
                     low = glm::min(low, vertex);

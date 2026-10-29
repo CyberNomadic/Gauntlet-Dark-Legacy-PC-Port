@@ -88,7 +88,7 @@ std::optional<LegendsPickup> legendsN64Pickup(const formats::LegendsN64Fixture& 
     const u32 flags = fixture.resolvedTemplateFlags;
     const u32 identity = flags & 0xffffU;
     const u8 kind = static_cast<u8>(fixture.resolvedTemplateKey >> 8U);
-    const s32 subtype = fixture.resolvedTemplateKey & 0xffU;
+    const s32 subtype = static_cast<s32>(fixture.resolvedTemplateKey & 0xffU);
     // e0065618: only flag0x10000000 opts into the placement's signed quantity.
     const s32 amount = (flags & 0x10000000U) != 0 ? fixture.quantity : fixture.templateAmount;
     LegendsPickup pickup;
@@ -118,8 +118,8 @@ std::optional<LegendsPickup> legendsN64Pickup(const formats::LegendsN64Fixture& 
         return pickup;
     }
     if (kind == 0x29 && subtype >= 1 && subtype <= 5) {
-        constexpr std::array<u32, 5> identities{0x1c0, 0x1d0, 0x1e0, 0x1f0, 0x200};
-        if (identity != identities[static_cast<usize>(subtype - 1)]) {
+        constexpr std::array<u32, 5> kIdentities{0x1c0, 0x1d0, 0x1e0, 0x1f0, 0x200};
+        if (identity != kIdentities[static_cast<usize>(subtype - 1)]) {
             return reject("N64 legend pickup has an unknown native identity");
         }
         pickup.award = LegendsAward{LegendsRelic::LegendItem, subtype - 1};
@@ -138,17 +138,17 @@ std::optional<LegendsPickup> legendsN64Pickup(const formats::LegendsN64Fixture& 
                identity == (static_cast<u32>(subtype) << 12U | 8U)) {
         // Native potion IDs are blue/yellow/green/red (e004d790); GDL stores
         // fire/electric/light/acid. Preserve the actual element, not the number.
-        constexpr std::array<u32, 4> elements{2, 3, 4, 1};
+        constexpr std::array<u32, 4> kElements{2, 3, 4, 1};
         pickup.offer = {static_cast<s32>(ItemKind::Potion), amount,
-                        elements[static_cast<usize>(subtype - 1)]};
+                        kElements[static_cast<usize>(subtype - 1)]};
     } else if (kind == 2 || kind == 0x2a) {
         if (kind == 0x2a) {
             // e0065618 uses the ordinary charged item grant, not a permanent
             // armor-stat award. Preserve all twelve identity bits: masking to
             // 0x3f0 (the artwork lookup) loses its breath/weapon distinction.
-            constexpr std::array<u32, 4> identities{0x620, 0x630, 0xa40, 0xa50};
+            constexpr std::array<u32, 4> kIdentities{0x620, 0x630, 0xa40, 0xa50};
             if (subtype < 1 || subtype > 4 ||
-                identity != identities[static_cast<usize>(subtype - 1)]) {
+                identity != kIdentities[static_cast<usize>(subtype - 1)]) {
                 return reject("N64 Skorne reward has an unknown native identity");
             }
         }

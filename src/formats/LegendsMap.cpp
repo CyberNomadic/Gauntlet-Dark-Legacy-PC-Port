@@ -56,7 +56,7 @@ public:
         range(bytes, directory, count * 12);
         for (usize i = 0; i < count; ++i) {
             const usize at = directory + i * 12;
-            const std::string tag(reinterpret_cast<const char*>(bytes.data() + at), 4);
+            const std::string tag(std::bit_cast<const char*>(bytes.data() + at), 4);
             const usize offset = readU32BE(bytes, at + 4);
             const usize size = readU32BE(bytes, at + 8);
             require(offset >= 8 && offset <= directory, "invalid WAD section offset");
@@ -94,7 +94,7 @@ public:
             ++end;
         }
         require(end != section.offset + section.count, "unterminated name");
-        return {reinterpret_cast<const char*>(m_bytes.data() + begin), end - begin};
+        return {std::bit_cast<const char*>(m_bytes.data() + begin), end - begin};
     }
 
 private:
@@ -142,8 +142,8 @@ void decodeCollision(const NativeWad& world, std::span<const u8> bytes, LegendsM
 
     // e003faf4 walks GRID offsets into CLST. F000|index selects a WOBJ owner;
     // 8000 on a triangle ends the cell. No marker means static world geometry.
-    constexpr s32 unreferenced = -2;
-    std::vector<s32> owners(triangles.count, unreferenced);
+    constexpr s32 kUnreferenced = -2;
+    std::vector<s32> owners(triangles.count, kUnreferenced);
     usize remainingReferences = kMaxCommands * 8;
     for (usize i = 0; i < grid.count; ++i) {
         const s16 first = static_cast<s16>(readU16BE(bytes, grid.offset + i * 2));
@@ -152,7 +152,7 @@ void decodeCollision(const NativeWad& world, std::span<const u8> bytes, LegendsM
             continue;
         }
         s32 owner = -1;
-        usize cursor = static_cast<usize>(first);
+        auto cursor = static_cast<usize>(first);
         for (;;) {
             require(cursor < lists.count / 2 && remainingReferences != 0,
                     "unterminated collision cell");
@@ -166,7 +166,7 @@ void decodeCollision(const NativeWad& world, std::span<const u8> bytes, LegendsM
             } else {
                 const usize index = entry & 0x7fffU;
                 require(index < owners.size(), "collision-list triangle outside CTRI");
-                require(owners[index] == unreferenced || owners[index] == owner,
+                require(owners[index] == kUnreferenced || owners[index] == owner,
                         "conflicting collision owners");
                 owners[index] = owner;
                 if ((entry & 0x8000U) != 0) {
@@ -181,7 +181,7 @@ void decodeCollision(const NativeWad& world, std::span<const u8> bytes, LegendsM
         LegendsMapCollisionTriangle triangle;
         triangle.flags = readU16BE(bytes, at + 6);
         triangle.nativeIndex = static_cast<u32>(i);
-        triangle.owner = owners[i] == unreferenced ? -1 : owners[i];
+        triangle.owner = owners[i] == kUnreferenced ? -1 : owners[i];
         for (usize vertex = 0; vertex < 3; ++vertex) {
             const usize index = readU16BE(bytes, at + vertex * 2);
             require(index < positions.size(), "collision vertex outside CVTX");
@@ -197,7 +197,7 @@ void decodeCollision(const NativeWad& world, std::span<const u8> bytes, LegendsM
             triangle.owner < 0 ? 0U : result.objects[static_cast<usize>(triangle.owner)].flags;
         // Native movement e0040958 queries 1D0 for ground and 220 for walls,
         // excluding owners with 40000. Unreferenced data never enters that query.
-        const bool active = owners[i] != unreferenced && (ownerFlags & 0x40000U) == 0;
+        const bool active = owners[i] != kUnreferenced && (ownerFlags & 0x40000U) == 0;
         triangle.floor = active && (triangle.flags & 0x1d0U) != 0;
         triangle.wall = active && (triangle.flags & 0x220U) != 0;
         result.collision.push_back(triangle);
@@ -250,9 +250,9 @@ Mesh decodeGeometry(std::span<const u8> bytes, const NativeModel& model, const S
             "display list outside OBJS");
     require(model.vertices >= geometry.offset && model.vertices <= geometry.end,
             "vertex base outside OBJS");
-    std::array<u32, 32> cache;
+    std::array<u32, 32> cache{};
     cache.fill(kEmptyVertex);
-    std::array<u32, 16> textureSegments;
+    std::array<u32, 16> textureSegments{};
     textureSegments.fill(kEmptyVertex);
     u32 material = 0;
     std::optional<Color> primitive;
@@ -484,8 +484,9 @@ LegendsMap LegendsMap::parseN64(std::span<const u8> worlds, std::span<const u8> 
         materialLists.try_emplace(list, static_cast<u32>(i));
         // These are the same native storage flags used by LegendsN64Texture. Pixel
         // availability is separate from the geometry and no substitute is fabricated.
-        externalTextures +=
-            readU32BE(models, at) == 0xfffffffeU || (readU32BE(models, at + 8) & 0x80U) != 0;
+        if (readU32BE(models, at) == 0xfffffffeU || (readU32BE(models, at + 8) & 0x80U) != 0) {
+            ++externalTextures;
+        }
     }
     usize remainingVertices = kMaxVertices;
     usize remainingCommands = kMaxCommands;
@@ -556,8 +557,8 @@ LegendsMap LegendsMap::parseN64(std::span<const u8> worlds, std::span<const u8> 
     require(visitedCount == placements.count, "unreachable world hierarchy record");
     decodeCollision(world, worlds, result);
     decodeStarts(placementBytes, result);
-    result.warnings.push_back("Geometry reader retains authored initial placement; dynamic "
-                              "rules are bound by the native scene adapter.");
+    result.warnings.emplace_back("Geometry reader retains authored initial placement; dynamic "
+                                 "rules are bound by the native scene adapter.");
     if (externalTextures != 0) {
         result.warnings.push_back(std::to_string(externalTextures) +
                                   " texture slots require borrowed or dynamic artwork; unavailable "

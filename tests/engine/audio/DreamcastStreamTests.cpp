@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -33,8 +34,8 @@ std::vector<u8> fixture(u32 blocks = 1) {
     put(bytes, 16, blocks);
     put(bytes, 20, 4);
     put(bytes, 24, 2);
-    constexpr std::string_view signature = "Sega Stream";
-    std::copy(signature.begin(), signature.end(), bytes.begin() + 0xd5);
+    constexpr std::string_view kSignature = "Sega Stream";
+    std::copy(kSignature.begin(), kSignature.end(), bytes.begin() + 0xd5);
     bytes[0x800] = bytes[0x801] = 0x10;
     bytes[0x1000] = bytes[0x1001] = 0x89;
     return bytes;
@@ -80,7 +81,7 @@ TEST_CASE("Dreamcast STR retains decoder state across interleaves and read sizes
     REQUIRE(stream.read(expected, std::numeric_limits<usize>::max()));
     REQUIRE(expected.size() == 16384);
     CHECK(expected[8192] == 32767.0f / 32768.0f);
-    for (usize piece : {1U, 3U, 997U, 4097U}) {
+    for (const usize piece : {1U, 3U, 997U, 4097U}) {
         stream.rewind();
         std::vector<f32> actual;
         while (stream.read(actual, piece)) {
@@ -233,7 +234,7 @@ TEST_CASE("Dreamcast native streams reach their authored end and rewind in bound
         // chunk plus a small rewind reference, even for the longest songs.
         std::ifstream file(entry.path(), std::ios::binary);
         std::array<u8, 32> header{};
-        file.read(reinterpret_cast<char*>(header.data()), header.size());
+        file.read(std::bit_cast<char*>(header.data()), header.size());
         REQUIRE(file.good());
         const u32 channels = readU32LE(header, 24);
         REQUIRE(channels >= 1);
@@ -245,21 +246,21 @@ TEST_CASE("Dreamcast native streams reach their authored end and rewind in bound
         REQUIRE(source.open(entry.path()));
         REQUIRE(source.frames() == expectedFrames);
         REQUIRE(source.desc().channels == channels);
-        constexpr usize prefixFrames = 4097;
+        constexpr usize kPrefixFrames = 4097;
         std::vector<f32> prefix;
-        REQUIRE(source.read(prefix, prefixFrames));
-        REQUIRE(prefix.size() == std::min<u64>(prefixFrames, expectedFrames) * channels);
+        REQUIRE(source.read(prefix, kPrefixFrames));
+        REQUIRE(prefix.size() == std::min<u64>(kPrefixFrames, expectedFrames) * channels);
         u64 decodedFrames = prefix.size() / channels;
         bool validSamples = std::all_of(prefix.begin(), prefix.end(), [](f32 sample) {
             return std::isfinite(sample) && sample >= -1.0f && sample < 1.0f;
         });
 
-        constexpr std::array<usize, 4> requests{997, 8191, 32768, 65536};
+        constexpr std::array<usize, 4> kRequests{997, 8191, 32768, 65536};
         usize request = 0;
         std::vector<f32> chunk;
         while (true) {
             chunk.clear();
-            const usize wanted = requests[request++ % requests.size()];
+            const usize wanted = kRequests[request++ % kRequests.size()];
             if (!source.read(chunk, wanted)) {
                 REQUIRE(chunk.empty());
                 break;
@@ -278,7 +279,7 @@ TEST_CASE("Dreamcast native streams reach their authored end and rewind in bound
         }
         CHECK(validSamples);
         CHECK(decodedFrames == expectedFrames);
-        for (usize wanted : {1U, 997U, 65536U}) {
+        for (const usize wanted : {1U, 997U, 65536U}) {
             CHECK_FALSE(source.read(chunk, wanted));
             CHECK(chunk.empty());
         }

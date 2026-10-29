@@ -132,7 +132,8 @@ TEST_CASE(
     }
     const auto templates = readFile(root / "items/generic/ptrap.rom");
     const auto program = readFile(root / "_program/game.bin");
-    usize maps = 0, warnings = 0;
+    usize maps = 0;
+    usize warnings = 0;
     std::map<u16, usize> counts;
     for (const auto& entry : std::filesystem::directory_iterator(root / "levels")) {
         if (!std::filesystem::is_regular_file(entry.path() / "worlds.wad")) {

@@ -43,7 +43,7 @@ void applyDreamcastInitialPose(formats::LegendsMap& map,
                 animation.track.frames.size() * animation.track.channelCount()) {
             throw FormatError("Dreamcast initial pose has an invalid animation");
         }
-        const usize object = static_cast<usize>(animation.objectIndex);
+        const auto object = static_cast<usize>(animation.objectIndex);
         if ((motion.objects[object].flags & kDisabled) == kDisabled) {
             continue;
         }
@@ -76,7 +76,7 @@ void applyDreamcastInitialPose(formats::LegendsMap& map,
             if (static_cast<usize>(current) >= count) {
                 throw FormatError("Dreamcast initial pose has an invalid parent");
             }
-            const usize node = static_cast<usize>(current);
+            const auto node = static_cast<usize>(current);
             if (ready[node] == 2) {
                 break;
             }
@@ -129,7 +129,7 @@ void applyDreamcastInitialPose(formats::LegendsMap& map,
         if (triangle.owner < 0 || static_cast<usize>(triangle.owner) >= count) {
             throw FormatError("Dreamcast initial pose collision has no native owner");
         }
-        const usize owner = static_cast<usize>(triangle.owner);
+        const auto owner = static_cast<usize>(triangle.owner);
         const auto& record = motion.objects[owner];
         if ((record.flags & kDynamic) == 0 || !changed[owner]) {
             continue;

@@ -150,7 +150,7 @@ TEST_CASE("Native poison barrel chains detonate a nearby explosive through physi
     event.damage = 30;
     event.seconds = 1;
     event.noFalloff = true;
-    LegendsBlast poison{event};
+    const LegendsBlast poison{event};
     CHECK_FALSE(ordinary.strike(poison.physicalDamageAt(green.base)));
     CHECK(ordinary.targetable());
 }

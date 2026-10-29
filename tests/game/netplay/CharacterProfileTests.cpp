@@ -162,27 +162,27 @@ TEST_CASE("local character selection validates indices floats counters and item 
 TEST_CASE("full native Legends completion rosters fit a reliable travel profile losslessly",
           "[netplay][character-profile][legends]") {
     // The 34 N64 and 41 Dreamcast nonempty native worlds, including secret/hub maps.
-    constexpr std::array n64{"battle1", "battle2", "battle3", "boss1",   "boss2",  "castle1",
-                             "castle3", "castle4", "castle5", "castle6", "hell1",  "hell2",
-                             "ice1",    "ice2",    "ice3",    "ice4",    "ice5",   "mount1",
-                             "mount2",  "mount3",  "mount4",  "mount5",  "mount6", "secret2",
-                             "secret3", "secret4", "secret5", "secret6", "tower2", "town1",
-                             "town2",   "town3",   "town4",   "town5"};
-    constexpr std::array dreamcast{"levela1", "levela2", "levela3", "levela4", "levela5", "levela6",
-                                   "levelb1", "levelb2", "levelb3", "levelb4", "levelb5", "levelb6",
-                                   "levelc1", "levelc2", "levelc3", "levelc4", "levelc5", "leveld1",
-                                   "leveld2", "leveld3", "leveld4", "leveld5", "levele1", "levele2",
-                                   "levelf1", "levelf2", "levelg1", "levelg4", "levelh1", "levelh2",
-                                   "levelh3", "levelh4", "levelh5", "levelh6", "levels1", "levels2",
-                                   "levels3", "levels4", "levels5", "levels6", "levelt1"};
-    static_assert(n64.size() == 34 && dreamcast.size() == 41);
+    constexpr std::array kN64{"battle1", "battle2", "battle3", "boss1",   "boss2",  "castle1",
+                              "castle3", "castle4", "castle5", "castle6", "hell1",  "hell2",
+                              "ice1",    "ice2",    "ice3",    "ice4",    "ice5",   "mount1",
+                              "mount2",  "mount3",  "mount4",  "mount5",  "mount6", "secret2",
+                              "secret3", "secret4", "secret5", "secret6", "tower2", "town1",
+                              "town2",   "town3",   "town4",   "town5"};
+    constexpr std::array kDreamcast{
+        "levela1", "levela2", "levela3", "levela4", "levela5", "levela6", "levelb1",
+        "levelb2", "levelb3", "levelb4", "levelb5", "levelb6", "levelc1", "levelc2",
+        "levelc3", "levelc4", "levelc5", "leveld1", "leveld2", "leveld3", "leveld4",
+        "leveld5", "levele1", "levele2", "levelf1", "levelf2", "levelg1", "levelg4",
+        "levelh1", "levelh2", "levelh3", "levelh4", "levelh5", "levelh6", "levels1",
+        "levels2", "levels3", "levels4", "levels5", "levels6", "levelt1"};
+    static_assert(kN64.size() == 34 && kDreamcast.size() == 41);
     auto profile = *CharacterProfile::capture(character());
     profile.progress.legends[0].completedMaps.clear();
     profile.progress.legends[1].completedMaps.clear();
-    for (const auto map : n64) {
+    for (const char* const map : kN64) {
         REQUIRE(profile.progress.legends[0].recordCompleted(map));
     }
-    for (const auto map : dreamcast) {
+    for (const char* const map : kDreamcast) {
         REQUIRE(profile.progress.legends[1].recordCompleted(map));
     }
     const auto packet = CharacterProfilePacket::encode(profile);
@@ -207,46 +207,46 @@ TEST_CASE("Legends profile compression rejects malformed and noncanonical map li
     profile.progress.legends[0].completedMaps = {"town1", "town2"};
     const auto packet = CharacterProfilePacket::encode(profile);
     REQUIRE(packet);
-    constexpr usize count = CharacterProfilePacket::kBaseBytes + 32;
-    constexpr usize first = count + 4;
-    constexpr usize second = first + 7;
-    REQUIRE((*packet)[count] == 2);
-    REQUIRE((*packet)[first] == 0);
-    REQUIRE((*packet)[first + 1] == 5);
-    REQUIRE((*packet)[second] == 4);
-    REQUIRE((*packet)[second + 1] == 1);
+    constexpr usize kCount = CharacterProfilePacket::kBaseBytes + 32;
+    constexpr usize kFirst = kCount + 4;
+    constexpr usize kSecond = kFirst + 7;
+    REQUIRE((*packet)[kCount] == 2);
+    REQUIRE((*packet)[kFirst] == 0);
+    REQUIRE((*packet)[kFirst + 1] == 5);
+    REQUIRE((*packet)[kSecond] == 4);
+    REQUIRE((*packet)[kSecond + 1] == 1);
     auto bad = *packet;
     SECTION("old protocol version") {
         bad[4] = 1;
     }
     SECTION("oversized completion count") {
-        bad[count] = 129;
+        bad[kCount] = 129;
     }
     SECTION("first name cannot refer to a previous prefix") {
-        bad[first] = 1;
+        bad[kFirst] = 1;
     }
     SECTION("suffix cannot be empty") {
-        bad[second + 1] = 0;
+        bad[kSecond + 1] = 0;
     }
     SECTION("suffix cannot exceed the map name bound") {
-        bad[second + 1] = 33;
+        bad[kSecond + 1] = 33;
     }
     SECTION("names must be lowercase canonical asset identities") {
-        bad[first + 2] = 'T';
+        bad[kFirst + 2] = 'T';
     }
     SECTION("path syntax is rejected") {
-        bad[first + 2] = '/';
+        bad[kFirst + 2] = '/';
     }
     SECTION("duplicate map cannot bypass canonical prefix compression") {
-        bad[second + 2] = '1';
+        bad[kSecond + 2] = '1';
     }
     SECTION("maps must be sorted") {
-        bad[second + 2] = '0';
+        bad[kSecond + 2] = '0';
     }
     SECTION("alternate equivalent prefix encodings are rejected") {
-        bad[second] = 3;
-        bad[second + 1] = 2;
-        bad.insert(bad.begin() + static_cast<std::ptrdiff_t>(second + 2), 'n');
+        bad[kSecond] = 3;
+        bad[kSecond + 1] = 2;
+        bad.insert(bad.begin() + static_cast<std::ptrdiff_t>(kSecond + 2), 'n');
     }
     SECTION("oversized aggregate packet") {
         bad.resize(CharacterProfilePacket::kMaxBytes + 1);

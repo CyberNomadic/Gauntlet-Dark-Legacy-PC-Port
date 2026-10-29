@@ -37,13 +37,13 @@ std::vector<u8> program() {
     name(kRealms + 32, "castle");
     put32(bytes, kRealms + 40, 7);
     put32(bytes, kRealms + 48, 16);
-    constexpr std::array<u32, 4> realms{3, 3, 0, 0};
-    constexpr std::array<std::string_view, 4> suffixes{"1", "2", "1", "6"};
-    for (usize i = 0; i < realms.size(); ++i) {
+    constexpr std::array<u32, 4> kRealms{3, 3, 0, 0};
+    constexpr std::array<std::string_view, 4> kSuffixes{"1", "2", "1", "6"};
+    for (usize i = 0; i < kRealms.size(); ++i) {
         const usize at = kLevels + i * 40;
-        put32(bytes, at, realms[i]);
+        put32(bytes, at, kRealms[i]);
         put32(bytes, at + 4, static_cast<u32>(i % 2));
-        name(at + 12, suffixes[i]);
+        name(at + 12, kSuffixes[i]);
     }
     put32(bytes, kLevels + 160, 16);
     return bytes;
@@ -72,7 +72,7 @@ TEST_CASE("N64 stage admission requires realm keys and preceding native stages",
     CHECK(policy.allows("castle6", progress));
     progress.obelisks = 0;
     CHECK_FALSE(policy.allows("castle6", progress));
-    progress.completedMaps.push_back("BAD");
+    progress.completedMaps.emplace_back("BAD");
     CHECK_FALSE(policy.allows("mount1", progress));
 }
 

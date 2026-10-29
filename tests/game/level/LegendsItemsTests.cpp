@@ -110,7 +110,7 @@ TEST_CASE("Native party awards reach selected joined classes even when the colle
         saves[i].name = "PARTY";
         saves[i].selectClass(static_cast<s32>(i));
     }
-    const std::array<CharacterSave*, 4> party{&saves[0], &saves[1], &saves[2], &saves[3]};
+    const std::array<CharacterSave*, 4> party{saves.data(), &saves[1], &saves[2], &saves[3]};
     for (const auto kind : {LegendsRelic::Runestone, LegendsRelic::Shard, LegendsRelic::Obelisk}) {
         LegendsPickup pickup;
         pickup.award = LegendsAward{kind, 3};
@@ -141,7 +141,9 @@ TEST_CASE("Native party awards reach selected joined classes even when the colle
 
 TEST_CASE("Shared Legends award boundary ignores invalid entries and does not share personal items",
           "[legends][items][legends-progress]") {
-    CharacterSave collector, friendSave, invalid;
+    CharacterSave collector;
+    CharacterSave friendSave;
+    CharacterSave invalid;
     invalid.character = -1;
     const auto originalInvalid = invalid;
     const std::array<CharacterSave*, 4> party{nullptr, &invalid, &friendSave, &friendSave};

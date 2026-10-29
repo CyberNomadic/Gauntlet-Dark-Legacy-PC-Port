@@ -270,7 +270,8 @@ void PlayerAttacks::ramBarrels(usize index, std::span<PlayerRuntime> players,
             if (!native.valid() || !native.damageable) {
                 continue;
             }
-            const usize key = static_cast<usize>(kImportedTargetBase + native.id);
+            const auto key =
+                static_cast<usize>(kImportedTargetBase) + static_cast<usize>(native.id);
             const MissileTarget body{static_cast<s32>(key), native.base, native.radius,
                                      native.height};
             if (std::ranges::find(rammed, key) == rammed.end() &&

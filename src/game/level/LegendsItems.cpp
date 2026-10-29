@@ -1,5 +1,6 @@
 #include "game/level/LegendsItems.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "game/players/PowerupEffects.h"
@@ -11,13 +12,10 @@ bool legendsAwardOwnedByParty(const LegendsAward& award, LegendsPlatform platfor
     if (static_cast<usize>(platform) >= kLegendsPlatformCount) {
         return false;
     }
-    for (const auto* save : party) {
-        if (save != nullptr && save->character >= 0 && save->character < kClassCount &&
-            save->progress().legendsProgress(platform).has(award.kind, award.index)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(party, [&](const CharacterSave* save) {
+        return save != nullptr && save->character >= 0 && save->character < kClassCount &&
+               save->progress().legendsProgress(platform).has(award.kind, award.index);
+    });
 }
 
 ItemTaking takeLegendsPickup(LegendsPickup& pickup, LegendsPlatform platform, CharacterSave& save,

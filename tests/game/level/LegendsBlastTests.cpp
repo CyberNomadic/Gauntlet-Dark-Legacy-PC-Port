@@ -60,7 +60,7 @@ TEST_CASE("Native barrel hits each player once and can reach late arrivals", "[l
 
 TEST_CASE("Native fire damage attenuates its physical portion but poison does not",
           "[legends][blasts]") {
-    LegendsBlast fire{blast()};
+    const LegendsBlast fire{blast()};
     CHECK(fire.damageAt({0, 2, 0}) == 39); // round40*.66 + round40*.33
     CHECK(fire.physicalDamageAt({0, 2, 0}) == 26);
     CHECK(fire.damageAt({5, 2, 0}) == 15); // physical minimum5%, elemental13
@@ -72,7 +72,7 @@ TEST_CASE("Native fire damage attenuates its physical portion but poison does no
     CHECK(poison.touch({0, {0, 0, 0}, true, .75f, 4}) == 30);
     REQUIRE(poison.step(.5f));
     CHECK_FALSE(poison.touch({0, {0, 0, 0}, true, .75f, 4}));
-    LegendsBlast scaled{blast(true), 2};
+    const LegendsBlast scaled{blast(true), 2};
     CHECK(scaled.damageAt({0, 2, 0}) == 60);
 }
 

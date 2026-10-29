@@ -148,8 +148,7 @@ bool PlayScene::open(RenderDevice& device, const GameContext& context, LevelWorl
         const PlacedItems& items = world.placedItems();
         for (usize i = 0; i < items.size(); ++i) {
             const auto& item = items.item(i);
-            if (item.subtype == ItemInfo::kRunestone && !item.taken &&
-                item.shownTo(partySize)) {
+            if (item.subtype == ItemInfo::kRunestone && !item.taken && item.shownTo(partySize)) {
                 m_sim.runeItem = i;
                 m_sim.runeMeter.begin(item.value, item.position,
                                       world.layout().maxBounds() - world.layout().minBounds(),
@@ -456,8 +455,9 @@ void PlayScene::setPartyCountOverride(std::optional<s32> count) {
 }
 
 s32 PlayScene::partyCount(s32 present) const {
-    return m_sim.partyCountOverride.has_value() ? std::clamp(*m_sim.partyCountOverride, 1, kPlayerCount)
-                                                : present;
+    return m_sim.partyCountOverride.has_value()
+               ? std::clamp(*m_sim.partyCountOverride, 1, kPlayerCount)
+               : present;
 }
 
 /** The additive mechanics follow the settings as they stand, so switching Aggressor Mode off
@@ -1293,9 +1293,8 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
     m_sim.opponentsAdvanced = false;
     m_sim.projectilesAdvanced = false;
     m_previousCamera = scriptedCamera() ? std::nullopt : std::optional{simulationCamera()};
-    m_previousSeatView = soloViewActive() && !scriptedCamera()
-                             ? std::optional{presentedCamera()}
-                             : std::nullopt;
+    m_previousSeatView =
+        soloViewActive() && !scriptedCamera() ? std::optional{presentedCamera()} : std::nullopt;
     m_previousBossCamera = bossCameraOn();
     // Application supplies fixed simulation ticks independently of rendered frames.
     const f32 tickRate =
@@ -1369,7 +1368,7 @@ PlayOutcome PlayScene::advanceNative(f64 deltaSeconds, const Inputs& inputs) {
         // Dismiss the last lesson instead of freezing its timer through departure.
         m_hud.help().clear();
         auto* imported = m_world->imported();
-        const bool nativeDeparture = imported && imported->departure().has_value();
+        const bool nativeDeparture = imported != nullptr && imported->departure().has_value();
         // Departing survivors cannot act, but native Legends continues their
         // current animation tree while its separate spin/shrink clock runs.
         // Another player's death and tower choice still run until all can leave.

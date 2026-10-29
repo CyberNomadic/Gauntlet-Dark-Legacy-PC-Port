@@ -37,8 +37,8 @@ struct Native {
     std::vector<u8> ipr = std::vector<u8>(108);
     std::vector<u8> pgen = std::vector<u8>(60);
     std::vector<u8> program = std::vector<u8>(0x6d000);
-    static constexpr usize realm = 0xe006c360U - 0xe0000400U;
-    static constexpr usize level = 0xe006c468U - 0xe0000400U;
+    static constexpr usize kRealm = 0xe006c360U - 0xe0000400U;
+    static constexpr usize kLevel = 0xe006c468U - 0xe0000400U;
     Native() {
         put32(ipr, 8, 92);
         put16(ipr, 40, 1);
@@ -59,17 +59,17 @@ struct Native {
         put32(pgen, 32, 5);
         real(pgen, 48, 16);
         real(pgen, 52, 10);
-        put32(program, realm, 0);
-        put32(program, realm + 8, 0xe0000400U + 100);
-        program[realm + 12] = 5;
-        program[realm + 13] = 4;
-        program[realm + 14] = 3;
-        program[realm + 15] = 'C';
-        put32(program, realm + 24, 16);
-        put32(program, level, 0);
-        put32(program, level + 12, 0xe0000400U + 120);
-        program[level + 16] = program[level + 17] = program[level + 18] = 0x22;
-        put32(program, level + 40, 16);
+        put32(program, kRealm, 0);
+        put32(program, kRealm + 8, 0xe0000400U + 100);
+        program[kRealm + 12] = 5;
+        program[kRealm + 13] = 4;
+        program[kRealm + 14] = 3;
+        program[kRealm + 15] = 'C';
+        put32(program, kRealm + 24, 16);
+        put32(program, kLevel, 0);
+        put32(program, kLevel + 12, 0xe0000400U + 120);
+        program[kLevel + 16] = program[kLevel + 17] = program[kLevel + 18] = 0x22;
+        put32(program, kLevel + 40, 16);
         const std::string stem = "castle";
         std::ranges::copy(stem, program.begin() + 100);
         program[120] = '1';
@@ -83,7 +83,7 @@ struct Native {
 
 TEST_CASE("Native one-shot actors retain coordinates and separate pending from live facing",
           "[legends][legends-actors][formats]") {
-    Native native;
+    const Native native;
     const auto result = native.decode();
     REQUIRE(result.warnings.empty());
     REQUIRE(result.actors.size() == 1);
@@ -130,7 +130,7 @@ TEST_CASE(
     CHECK(actor.spawn.kind == 4); // realm large != medium
     CHECK(actor.spawn.tier == 4);
     CHECK(actor.spawn.algorithm == kThrowWay);
-    native.program[Native::level + 17] = 12;
+    native.program[Native::kLevel + 17] = 12;
     CHECK(native.decode().actors.front().spawn.kind == 16); // level override
     native.ipr[102] = native.pgen[14] = 5;
     native.ipr[103] = 17;
@@ -221,7 +221,7 @@ TEST_CASE("Native actor decoder rejects truncation and diagnoses unsupported pla
     }
     SECTION("mixed native roster") {
         native.pgen[13] = 2;
-        native.program[Native::level + 16] = 33;
+        native.program[Native::kLevel + 16] = 33;
         CHECK(native.decode().actors.empty());
         CHECK(native.decode().warnings.size() == 1);
     }
@@ -240,9 +240,12 @@ TEST_CASE("All native N64 placed enemies and golems have audited descriptors",
     }
     const auto program = readFile(root / "_program/game.bin");
     const auto pgen = readFile(root / "items/generic/pgen.rom");
-    usize maps = 0, ordinary = 0, golems = 0, its = 0;
+    usize maps = 0;
+    usize ordinary = 0;
+    usize golems = 0;
+    usize its = 0;
     for (const auto& entry : std::filesystem::directory_iterator(root / "levels")) {
-        const auto path = entry.path();
+        const auto& path = entry.path();
         if (!std::filesystem::exists(path / "worlds.wad")) {
             continue;
         }
@@ -262,7 +265,7 @@ TEST_CASE("All native N64 placed enemies and golems have audited descriptors",
         }
         REQUIRE(result.actors.size() == expected);
         for (const auto& actor : result.actors) {
-            const usize at = start + actor.nativeIndex * 16;
+            const usize at = start + static_cast<usize>(actor.nativeIndex) * 16;
             CHECK(actor.spawn.position == Vec3{std::bit_cast<s16>(readU16BE(ipr, at)),
                                                std::bit_cast<s16>(readU16BE(ipr, at + 2)),
                                                std::bit_cast<s16>(readU16BE(ipr, at + 4))} /

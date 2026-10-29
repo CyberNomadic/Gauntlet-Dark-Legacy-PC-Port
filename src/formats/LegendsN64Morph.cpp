@@ -148,7 +148,7 @@ decodeLegendsN64Morph(std::span<const u8> track, std::span<const u8> binding, co
     const u16 shiftFlags = readU16BE(track, 10);
     require(frames != 0 && frames <= 4096 && keys != 0,
             "N64 Legends morph: invalid frame/key count");
-    std::array<s16, 3> base;
+    std::array<s16, 3> base{};
     for (usize axis = 0; axis < base.size(); ++axis) {
         base[axis] = std::bit_cast<s16>(readU16BE(track, 4 + axis * 2));
     }
@@ -172,7 +172,7 @@ decodeLegendsN64VertexKeys(std::span<const u8> track, std::span<const u8> bindin
     if ((track[0] & 1U) != 0 || readU16BE(track, 4) != 0) {
         return std::nullopt;
     }
-    std::array<s16, 3> base;
+    std::array<s16, 3> base{};
     for (usize axis = 0; axis < base.size(); ++axis) {
         base[axis] = std::bit_cast<s16>(readU16BE(track, 8 + axis * 2));
     }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -34,7 +35,7 @@ std::string text(std::span<const u8> bytes, usize at, usize size) {
     while (count < size && bytes[at + count] != 0) {
         ++count;
     }
-    return lower(std::string(reinterpret_cast<const char*>(bytes.data() + at), count));
+    return lower(std::string(std::bit_cast<const char*>(bytes.data() + at), count));
 }
 
 std::vector<std::string> streamReferences(std::span<const u8> bytes, const std::string& level) {
@@ -127,7 +128,7 @@ dreamcastLegendsMusic(const std::filesystem::path& levelDirectory) {
         if (!entry.is_regular_file() || lower(paths::utf8(entry.path().extension())) != ".wad") {
             continue;
         }
-        require(entry.file_size() <= 16U * 1024U * 1024U);
+        require(entry.file_size() <= std::uintmax_t{16} * 1024 * 1024);
         for (const auto& reference : streamReferences(readFile(entry.path()), name.substr(5))) {
             const auto found = files.find(reference);
             if (found == files.end()) {

@@ -49,7 +49,7 @@ struct Tables {
         put32(randoms, 44, 0x53544f50);
         put32(randoms, 52, 0x454e4420); // END
     }
-    LegendsN64Fixture container(u32 index = 0) const {
+    static LegendsN64Fixture container(u32 index = 0) {
         LegendsN64Fixture result;
         result.kind = LegendsN64FixtureKind::Container;
         result.nativeIndex = index;
@@ -62,7 +62,7 @@ struct Tables {
 TEST_CASE("Concealed native loot retains its initial cache and exact zero-before-decrement clock",
           "[legends][loot-selectors]") {
     Tables data;
-    const std::array fixtures{data.container()};
+    const std::array fixtures{Tables::container()};
     LegendsLootSelectors loot(data.powers, data.randoms, fixtures, 1);
     REQUIRE(loot.slots().size() == 1);
     CHECK(loot.selected(0).value().resolvedTemplateKey == 0);
@@ -86,7 +86,7 @@ TEST_CASE(
     "Unset native concealed caches wait for the first selection without reading before PPower",
     "[legends][loot-selectors]") {
     Tables data;
-    auto fixture = data.container();
+    auto fixture = Tables::container();
     fixture.quantity = -1;
     const std::array fixtures{fixture};
     LegendsLootSelectors loot(data.powers, data.randoms, fixtures, 1);
@@ -114,9 +114,9 @@ TEST_CASE(
 TEST_CASE("Native concealed slots share cursors even when their parent is multiplayer-gated",
           "[legends][loot-selectors]") {
     Tables data;
-    auto first = data.container(0);
+    auto first = Tables::container(0);
     first.minimumPlayers = 4;
-    const std::array fixtures{first, data.container(1)};
+    const std::array fixtures{first, Tables::container(1)};
     LegendsLootSelectors loot(data.powers, data.randoms, fixtures, 1);
     REQUIRE(loot.slots().size() == 2);
     for (s32 i = 0; i < 21; ++i) {
@@ -135,10 +135,10 @@ TEST_CASE("Native concealed slots share cursors even when their parent is multip
 TEST_CASE("Native floor initialization and opening at timer zero resolve the shared selector",
           "[legends][loot-selectors]") {
     Tables data;
-    auto floor = data.container();
+    auto floor = Tables::container();
     floor.kind = LegendsN64FixtureKind::Powerup;
     floor.templateKey = 0x2201;
-    const std::array fixtures{data.container(), floor};
+    const std::array fixtures{Tables::container(), floor};
     LegendsLootSelectors loot(data.powers, data.randoms, fixtures, 1);
     REQUIRE(loot.slots().size() == 2);
     CHECK_FALSE(loot.slots()[0].contained);
@@ -160,7 +160,7 @@ TEST_CASE("Native floor initialization and opening at timer zero resolve the sha
 TEST_CASE("Native nested selectors retain absent-key fallback and reject malformed cycles",
           "[legends][loot-selectors]") {
     Tables data;
-    auto fixture = data.container();
+    auto fixture = Tables::container();
     fixture.containedPowerup = 0x2202;
     const std::array fixtures{fixture};
     SECTION("native missing-key fallback and recursion") {
@@ -187,7 +187,7 @@ TEST_CASE("Native nested selectors retain absent-key fallback and reject malform
     SECTION("prebinding multiplication has a shared outcome budget") {
         std::vector<LegendsN64Fixture> crowded;
         for (u32 i = 0; i < 3000; ++i) {
-            crowded.push_back(data.container(i));
+            crowded.push_back(Tables::container(i));
         }
         CHECK_THROWS_AS(LegendsLootSelectors(data.powers, data.randoms, crowded, 1), FormatError);
     }
@@ -196,7 +196,7 @@ TEST_CASE("Native nested selectors retain absent-key fallback and reject malform
 TEST_CASE("Native loot selection is invariant under render-step subdivision",
           "[legends][loot-selectors]") {
     Tables data;
-    const std::array fixtures{data.container()};
+    const std::array fixtures{Tables::container()};
     for (const s32 rate : {30, 60, 144}) {
         LegendsLootSelectors loot(data.powers, data.randoms, fixtures, 1);
         for (s32 i = 0; i < rate * 10; ++i) {
@@ -234,7 +234,7 @@ TEST_CASE("All native maps resolve every concealed selector branch without inven
         LegendsLootSelectors loot;
         REQUIRE_NOTHROW(loot = LegendsLootSelectors(powers, randoms, fixtures, 1));
         for (usize i = 0; i < loot.slots().size(); ++i) {
-            hidden += loot.slots()[i].contained;
+            hidden += loot.slots()[i].contained ? 1 : 0;
             const auto outcomes = loot.outcomes(i);
             REQUIRE_FALSE(outcomes.empty());
             for (const auto& choice : outcomes) {

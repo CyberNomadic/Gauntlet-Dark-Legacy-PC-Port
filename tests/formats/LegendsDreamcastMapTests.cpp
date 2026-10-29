@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <filesystem>
@@ -77,7 +78,7 @@ struct Fixture {
         put32(model, kLod + 12, kVertices);
         put32(model, kLod + 16, 2);
         put32(model, kLod + 20, kTriangles);
-        const Vec3 vertices[] = {{0, 0, 0}, {1, 0, 0}, {0, 0, 1}, {1, 0, 1}};
+        const std::array<Vec3, 4> vertices{{{0, 0, 0}, {1, 0, 0}, {0, 0, 1}, {1, 0, 1}}};
         for (usize i = 0; i < 4; ++i) {
             for (int axis = 0; axis < 3; ++axis) {
                 putFloat(model, kVertices + i * 24 + static_cast<usize>(axis) * 4,
@@ -200,7 +201,7 @@ TEST_CASE("Dreamcast fixture models decode packed vertices and position back-ref
     put32(fixture.model, Fixture::kLod + 4, 0x404);
     std::fill(fixture.model.begin() + Fixture::kVertices,
               fixture.model.begin() + Fixture::kTriangles, 0);
-    const Vec3 points[] = {{0, 0, 0}, {1, 0, 0}, {0, 0, 1}};
+    const std::array<Vec3, 3> points{{{0, 0, 0}, {1, 0, 0}, {0, 0, 1}}};
     for (usize i = 0; i < 3; ++i) {
         const usize at = Fixture::kVertices + i * 12;
         put16(fixture.model, at + 2, 512);

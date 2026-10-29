@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
 #include <limits>
 #include <string_view>
@@ -248,7 +249,8 @@ TEST_CASE("N64 world hierarchy retains parents without moving collision owners",
     fixture.world.resize(Fixture::kPlacement + kCount * 44);
     for (usize i = 1; i < kCount; ++i) {
         std::copy_n(fixture.world.begin() + Fixture::kPlacement, 44,
-                    fixture.world.begin() + Fixture::kPlacement + i * 44);
+                    fixture.world.begin() +
+                        static_cast<std::ptrdiff_t>(Fixture::kPlacement + i * 44));
     }
     // Node0 has child1, node1 has child3 and sibling2. This deliberately differs
     // from numeric index order: native lookup visits 0,1,3,2.
@@ -277,13 +279,13 @@ TEST_CASE("N64 world hierarchy retains parents without moving collision owners",
         put16(fixture.world, Fixture::kPlacement + 38, 0);
     }
     SECTION("shared child") {
-        put16(fixture.world, Fixture::kPlacement + 2 * 44 + 38, 3);
+        put16(fixture.world, Fixture::kPlacement + usize{2} * 44 + 38, 3);
     }
     SECTION("out of bounds child") {
         put16(fixture.world, Fixture::kPlacement + 38, kCount);
     }
     SECTION("sibling cycle") {
-        put16(fixture.world, Fixture::kPlacement + 2 * 44 + 36, 1);
+        put16(fixture.world, Fixture::kPlacement + usize{2} * 44 + 36, 1);
     }
     SECTION("unreachable records") {
         put16(fixture.world, Fixture::kPlacement + 38, 0xffff);
@@ -464,7 +466,7 @@ TEST_CASE("N64 Legends collision and entrances retain native data independently 
     CHECK(map.starts[0].facingRadians == 0);
 
     SECTION("CFOT is directory metadata and its absence defaults to 64") {
-        fixture.world[CollisionFixture::kDirectory + 4 * 12] = 'X';
+        fixture.world[CollisionFixture::kDirectory + usize{4} * 12] = 'X';
         const LegendsMap changed = LegendsMap::parseN64(fixture.world, fixture.model);
         CHECK(changed.collision[0].vertices[1] == Vec3{0, 0, 2});
     }
@@ -482,7 +484,7 @@ TEST_CASE("N64 Legends collision rejects invalid indices and unterminated owners
           "[formats][legends][legends-collision]") {
     CollisionFixture fixture;
     SECTION("invalid fixed point") {
-        put32(fixture.world, CollisionFixture::kDirectory + 4 * 12 + 8, 0);
+        put32(fixture.world, CollisionFixture::kDirectory + usize{4} * 12 + 8, 0);
     }
     SECTION("collision vertex outside pool") {
         put16(fixture.world, CollisionFixture::kTriangles, 5);

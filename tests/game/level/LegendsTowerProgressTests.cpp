@@ -12,13 +12,13 @@ using namespace gdl::game;
 TEST_CASE("N64 Tower doors require their native obelisk sets", "[legends][tower-progress]") {
     LegendsProgress saved;
     REQUIRE(LegendsTowerProgress::of(saved).doors == std::array<bool, 4>{});
-    constexpr std::array<u8, 4> masks{0x60, 7, 0x18, 0x80};
-    for (usize door = 0; door < masks.size(); ++door) {
+    constexpr std::array<u8, 4> kMasks{0x60, 7, 0x18, 0x80};
+    for (usize door = 0; door < kMasks.size(); ++door) {
         for (u32 bits = 0; bits <= 255; ++bits) {
             saved.obelisks = bits;
             CAPTURE(door, bits);
             REQUIRE(LegendsTowerProgress::of(saved).doors[door] ==
-                    ((bits & masks[door]) == masks[door]));
+                    ((bits & kMasks[door]) == kMasks[door]));
         }
     }
     saved.obelisks = 0x7f;
@@ -30,7 +30,8 @@ TEST_CASE("N64 Tower doors require their native obelisk sets", "[legends][tower-
 TEST_CASE("N64 Tower completion records do not replace missing obelisks",
           "[legends][tower-progress]") {
     LegendsProgress saved;
-    for (const auto map : {"mount1", "mount2", "mount3", "castle1", "castle6", "town1", "town2"}) {
+    for (const char* const map :
+         {"mount1", "mount2", "mount3", "castle1", "castle6", "town1", "town2"}) {
         REQUIRE(saved.recordCompleted(map));
     }
     saved.runestones = 0x1fff;

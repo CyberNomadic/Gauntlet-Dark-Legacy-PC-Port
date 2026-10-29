@@ -15,9 +15,9 @@ LegendsTowerProgress LegendsTowerProgress::of(const LegendsProgress& progress) {
     // e0054fdc stores positive native obelisk identity N at bit N-1. Bit7
     // is absent from the seven placed obelisks: collecting those seven
     // must NOT inadvertently open Battlefield.
-    constexpr std::array<u8, 4> required{0x60, 0x07, 0x18, 0x80};
-    for (usize i = 0; i < required.size(); ++i) {
-        result.doors[i] = (progress.obelisks & required[i]) == required[i];
+    constexpr std::array<u8, 4> kRequired{0x60, 0x07, 0x18, 0x80};
+    for (usize i = 0; i < kRequired.size(); ++i) {
+        result.doors[i] = (progress.obelisks & kRequired[i]) == kRequired[i];
     }
     return result;
 }

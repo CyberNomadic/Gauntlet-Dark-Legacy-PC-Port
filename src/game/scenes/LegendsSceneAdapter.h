@@ -42,6 +42,9 @@ namespace gdl::game {
 
 /** Native Legends presentation bound to the common item/texture animation runtime.
  * Owns its archives; no campaign, player inventory or save state is borrowed. */
+// Its members stand in the order the level is bound, subject by subject; packing them
+// would scatter that reading for a few dozen bytes of padding on one object.
+// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding)
 class LegendsSceneAdapter {
 public:
     static std::unique_ptr<LegendsSceneAdapter> load(RenderDevice& device, LegendsPlatform platform,
@@ -163,13 +166,13 @@ private:
                               usize idleFigure);
     void updateContainerSelectors(f32 seconds);
     void prepareSelectorPickup(usize pickup);
-    void selectFloorOutcome(usize binding);
-    void openContainer(usize container);
+    void selectFloorOutcome(usize index);
+    void openContainer(usize index);
     void updateContainers();
     void touchContainers(PlayerActor& actor);
     void bindPortal(RenderDevice& device, formats::LegendsN64Portal portal, usize idleFigure);
     void updatePortals();
-    void selectPortal(usize portal);
+    void selectPortal(usize index);
     void bindWorld(RenderDevice& device, const formats::LegendsMap& map,
                    std::span<const TextureAnimationInfo> animations);
     void place(RenderDevice& device, std::string_view name, const ItemInstance& instance,

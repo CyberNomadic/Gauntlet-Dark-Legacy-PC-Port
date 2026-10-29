@@ -259,6 +259,9 @@ template <class A, class T> void companionPose(A& archive, T& value) {
         vector(a, node.rotation);
         vector(a, node.position);
         vector(a, node.scale);
+        // number() reads and writes through one template: a const value would turn its
+        // reader into one that cannot assign.
+        // NOLINTNEXTLINE(misc-const-correctness)
         u8 order = static_cast<u8>(node.rotationOrder);
         a.number(order);
         if (order > static_cast<u8>(NodePose::RotationOrder::YawPitchRoll)) {

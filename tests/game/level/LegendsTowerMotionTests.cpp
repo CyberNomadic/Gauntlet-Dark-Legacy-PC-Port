@@ -124,7 +124,7 @@ TEST_CASE("Legends Tower idle waits for animation completion", "[legends][tower]
 
 TEST_CASE("Legends Tower idle retains native random selection boundaries",
           "[legends][tower][motion]") {
-    for (u16 value : {u16{0}, u16{983}, u16{984}, u16{6553}, u16{6554}, u16{32767}}) {
+    for (const u16 value : {u16{0}, u16{983}, u16{984}, u16{6553}, u16{6554}, u16{32767}}) {
         DYNAMIC_SECTION(value) {
             LegendsTowerIdle idle;
             const auto cue = idle.update(true, value);

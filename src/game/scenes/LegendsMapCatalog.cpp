@@ -5,6 +5,7 @@
 #include <set>
 #include <system_error>
 
+#include "engine/core/Log.h"
 #include "engine/core/Strings.h"
 #include "engine/io/AssetLocator.h"
 #include "engine/platform/Paths.h"
@@ -99,8 +100,10 @@ std::vector<LegendsMapEntry> legendsMaps(LegendsPlatform platform,
                         return entries;
                     }
                 }
-            } catch (const std::filesystem::filesystem_error&) {
+            } catch (const std::filesystem::filesystem_error& error) {
                 // An unavailable extraction must not hide another valid configured root.
+                log::trace("Legends maps: {} is not readable: {}", paths::utf8(ancestor),
+                           error.what());
             }
             const auto parent = ancestor.parent_path();
             if (parent == ancestor) {
@@ -117,7 +120,7 @@ std::optional<std::filesystem::path> legendsMapPath(std::span<const LegendsMapEn
     if (value.empty()) {
         return std::nullopt;
     }
-    const std::filesystem::path path{value};
+    std::filesystem::path path{value};
     if (value.find_first_of("/\\") != std::string_view::npos || path.has_root_name()) {
         return path;
     }

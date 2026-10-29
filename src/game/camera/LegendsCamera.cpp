@@ -122,9 +122,8 @@ Vec3 LegendsCamera::target(const Vec3& feet, f32& pitch, f32& yaw) {
     const Mode previous = m_mode;
     if (distance >= 91 * 91) {
         m_mode = Mode::TowerOuter;
-    } else if (m_mode == Mode::TowerOuter && distance <= 87 * 87) {
-        m_mode = Mode::TowerMiddle;
-    } else if (m_mode == Mode::TowerInner && distance >= 47 * 47) {
+    } else if ((m_mode == Mode::TowerOuter && distance <= 87 * 87) ||
+               (m_mode == Mode::TowerInner && distance >= 47 * 47)) {
         m_mode = Mode::TowerMiddle;
     } else if (distance <= 42 * 42) {
         m_mode = Mode::TowerInner;

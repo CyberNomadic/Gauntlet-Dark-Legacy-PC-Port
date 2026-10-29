@@ -41,7 +41,7 @@ std::string fourcc(std::span<const u8> bytes, usize offset) {
     while (begin < offset + 4 && bytes[begin] == 0) {
         ++begin;
     }
-    return {reinterpret_cast<const char*>(bytes.data() + begin), offset + 4 - begin};
+    return {std::bit_cast<const char*>(bytes.data() + begin), offset + 4 - begin};
 }
 
 s16 signed16(std::span<const u8> bytes, usize at) {
@@ -64,7 +64,7 @@ public:
         range(bytes, directory, count * 12);
         for (usize i = 0; i < count; ++i) {
             const usize at = directory + i * 12;
-            const std::string tag(reinterpret_cast<const char*>(bytes.data() + at), 4);
+            const std::string tag(std::bit_cast<const char*>(bytes.data() + at), 4);
             const usize offset = readU32BE(bytes, at + 4);
             require(offset >= 8 && offset <= directory, "invalid sequence section offset");
             require(m_sections.emplace(tag, Section{offset, readU32BE(bytes, at + 8), directory})
@@ -268,8 +268,8 @@ std::optional<TransformKeys> transformKeys(std::span<const u8> bytes, usize payl
         return std::nullopt;
     }
     const usize table = rotation ? 0x32b90 : 0x32f98; // US load base E0000400.
-    range(program, table, 256 * 4);
-    std::array<f32, 256> deltas;
+    range(program, table, usize{256} * 4);
+    std::array<f32, 256> deltas{};
     for (usize i = 0; i < deltas.size(); ++i) {
         deltas[i] = std::bit_cast<f32>(readU32BE(program, table + i * 4));
         require(std::isfinite(deltas[i]) && std::abs(deltas[i]) <= 16.0f,
@@ -567,8 +567,8 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
     usize unsupportedRuntimeTextures = 0;
     usize externalSequences = 0;
     usize remainingNodes = 65536;
-    usize remainingValues = 4 * 1024 * 1024;
-    usize remainingVariantVertices = 1024 * 1024;
+    usize remainingValues = usize{4} * 1024 * 1024;
+    usize remainingVariantVertices = usize{1024} * 1024;
     usize remainingVariantBytes = kLegendsN64VariantByteLimit;
     std::set<std::string> treeNames;
     std::set<std::string> sharedTextureSequences;
@@ -581,7 +581,7 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
     }
     const usize dynamicBufferSize = wad.metadataCount("DSIZ");
     if (!dynamicSequences.empty() && !dynamicOffsets.empty()) {
-        require(dynamicSequences.size() <= 64 * 1024 * 1024 && dynamicBufferSize >= 8 &&
+        require(dynamicSequences.size() <= usize{64} * 1024 * 1024 && dynamicBufferSize >= 8 &&
                     dynamicBufferSize <= 1048576,
                 "invalid dynamic sequence buffer extent");
     }
@@ -592,7 +592,7 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
             ++nameLength;
         }
         require(nameLength != 0 && nameLength < 16, "invalid sequence group name");
-        const std::string group(reinterpret_cast<const char*>(bytes.data() + groupAt), nameLength);
+        const std::string group(std::bit_cast<const char*>(bytes.data() + groupAt), nameLength);
         const usize count = readU32BE(bytes, groupAt + 16);
         const usize first = readU32BE(bytes, groupAt + 20);
         require(first >= lists.offset && first <= lists.offset + lists.count * 8 &&
@@ -692,8 +692,7 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
                         }
                         require(length < 32 && nameAt + length < names.offset + names.count,
                                 "unterminated BODY model name");
-                        modelName.assign(reinterpret_cast<const char*>(bytes.data() + nameAt),
-                                         length);
+                        modelName.assign(std::bit_cast<const char*>(bytes.data() + nameAt), length);
                         if (!modelName.empty()) {
                             node.name = modelName;
                         }
@@ -779,9 +778,13 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
                 const u8 type = sequenceBytes[trackAt] & 0x1fU;
                 const usize node = sequenceBytes[trackAt + 1];
                 if ((type == 9 || type == 11 || type == 13) && node < tree.nodes.size()) {
-                    const usize payload = at + readU16BE(sequenceBytes, trackAt + 2) * 4;
+                    const usize payload =
+                        at + static_cast<usize>(readU16BE(sequenceBytes, trackAt + 2)) * 4;
                     require(payload >= at + 8 + trackCount * 4,
                             "transform overlaps sequence header");
+                    // sequenceEnd bounds the keys and frameCount is how many a sequence
+                    // holds: the names share a stem, not a meaning.
+                    // NOLINTNEXTLINE(readability-suspicious-call-argument)
                     auto keys = transformKeys(sequenceBytes, payload, sequenceEnd,
                                               sequenceBytes[trackAt], frameCount, program);
                     if (!keys || sequenceBytes[at + 1] == 0 ||
@@ -793,7 +796,8 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
                         transforms[node][channel] = std::move(keys);
                     }
                 } else if ((type == 6 || type == 16) && node < tree.nodes.size()) {
-                    const usize payload = at + readU16BE(sequenceBytes, trackAt + 2) * 4;
+                    const usize payload =
+                        at + static_cast<usize>(readU16BE(sequenceBytes, trackAt + 2)) * 4;
                     const usize header = type == 16 ? 16 : 12;
                     require(payload >= at + 8 + trackCount * 4 && payload + header <= sequenceEnd,
                             "morph track outside sequence extent");
@@ -806,7 +810,8 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
                         vertexKeyNodes.insert(node);
                     }
                 } else if (type == 7) {
-                    const usize payload = at + readU16BE(sequenceBytes, trackAt + 2) * 4;
+                    const usize payload =
+                        at + static_cast<usize>(readU16BE(sequenceBytes, trackAt + 2)) * 4;
                     require(payload >= at + 8 + trackCount * 4 && payload + 12 <= sequenceEnd,
                             "texture track outside SEQS");
                     // e0032478 advances a six-bit fractional counter by dt*30*16*64/rate.
@@ -854,20 +859,22 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
                         ++unsupportedTracks;
                     }
                 } else if (type == 15) {
-                    const usize payload = at + readU16BE(sequenceBytes, trackAt + 2) * 4;
+                    const usize payload =
+                        at + static_cast<usize>(readU16BE(sequenceBytes, trackAt + 2)) * 4;
                     require(payload >= at + 8 + trackCount * 4 && payload + 4 <= sequenceEnd,
                             "shared animation reference outside SEQS");
                     if (!sharedTextureSequences.contains(fourcc(sequenceBytes, payload))) {
                         ++unsupportedTracks;
                     }
                 } else if (type == 5 && node < tree.nodes.size()) {
-                    const usize payload = at + readU16BE(sequenceBytes, trackAt + 2) * 4;
+                    const usize payload =
+                        at + static_cast<usize>(readU16BE(sequenceBytes, trackAt + 2)) * 4;
                     require(payload >= at + 8 + trackCount * 4 && payload + 4 <= sequenceEnd,
                             "object track outside SEQS");
                     const usize countFrames = sequenceBytes[payload];
                     const bool delayed = (sequenceBytes[payload + 1] & 1U) != 0;
                     require(countFrames != 0 &&
-                                payload + 2 + (countFrames + delayed) * 2 <= sequenceEnd,
+                                payload + 2 + (countFrames + (delayed ? 1 : 0)) * 2 <= sequenceEnd,
                             "invalid object frame table");
                     const usize model = readU16BE(sequenceBytes, payload + 2 + (delayed ? 2 : 0));
                     require(model == 0xffff || model < models.size(),
@@ -993,7 +1000,7 @@ LegendsN64Sequences decodeLegendsN64Sequences(std::span<const u8> bytes,
             // e00327e4. Thus seconds/frame=headerByte/480, while the common
             // player stores period*900, not frames/second.
             pose.frameRate = sequenceBytes[at + 1] == 0
-                                 ? 30
+                                 ? s16{30}
                                  : static_cast<s16>(30U * sequenceBytes[at + 1] / 16U);
             pose.repeats = (sequenceBytes[at + 2] & 1U) == 0;
             // Common bit0 reverses effect frames only; transform keys below are

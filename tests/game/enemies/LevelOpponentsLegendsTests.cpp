@@ -27,9 +27,9 @@ public:
     mutable const WorldCollision* boundCollision = nullptr;
     void bindCollision(WorldCollision& collision) const override { boundCollision = &collision; }
     void capturePresentation() override {}
-    void update(f32, bool) override {}
-    void draw(RenderDevice&, const Mat4&, const WorldCamera&, TreeModel::Pass, f32) const override {
-    }
+    void update(f32 /*seconds*/, bool /*timeStopped*/) override {}
+    void draw(RenderDevice& /*device*/, const Mat4& /*clip*/, const WorldCamera& /*camera*/,
+              TreeModel::Pass /*pass*/, f32 /*presentationAlpha*/) const override {}
     std::span<const ImportedActor> importedActors() const override { return roster; }
 };
 LevelOpponents::Events safeEvents() {

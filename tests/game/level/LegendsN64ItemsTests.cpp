@@ -51,11 +51,11 @@ TEST_CASE("N64 pickups translate native quantities and potion elements explicitl
     checkOffer(nativePickup(0x0304, 300, 6), ItemKind::Gold, 300);
     checkOffer(nativePickup(0x0401, 50, 1), ItemKind::Food, 50);
     checkOffer(nativePickup(0x0402, -50, 0x10001), ItemKind::Food, -50);
-    constexpr std::array<u32, 4> elements{2, 3, 4, 1};
+    constexpr std::array<u32, 4> kElements{2, 3, 4, 1};
     for (u16 subtype = 1; subtype <= 4; ++subtype) {
         checkOffer(nativePickup(static_cast<u16>(0x0100U | subtype), 1,
                                 0x10008U | (static_cast<u32>(subtype) << 12U)),
-                   ItemKind::Potion, 1, elements[subtype - 1]);
+                   ItemKind::Potion, 1, kElements[subtype - 1]);
     }
     auto fixture = nativePickup(0, 1, 0x10000007);
     fixture.quantity = 5;
@@ -158,17 +158,17 @@ TEST_CASE("N64 collectibles award only their isolated native campaign", "[legend
 
 TEST_CASE("native Skorne equipment retains charged GDL equipment mechanics",
           "[legends][n64][items][bosses]") {
-    constexpr std::array<u32, 4> identities{0x620, 0x630, 0xa40, 0xa50};
-    constexpr std::array<u32, 4> effects{powerup::kSkorneMask, powerup::kSkorneHorns,
-                                         powerup::kRightGauntlet, powerup::kLeftGauntlet};
-    for (usize i = 0; i < identities.size(); ++i) {
+    constexpr std::array<u32, 4> kIdentities{0x620, 0x630, 0xa40, 0xa50};
+    constexpr std::array<u32, 4> kEffects{powerup::kSkorneMask, powerup::kSkorneHorns,
+                                          powerup::kRightGauntlet, powerup::kLeftGauntlet};
+    for (usize i = 0; i < kIdentities.size(); ++i) {
         CAPTURE(i);
         const s16 amount = i < 2 ? 50 : 100;
         const u16 key = static_cast<u16>(0x2a01U + i);
-        auto pickup = legendsN64Pickup(nativePickup(key, amount, 0x840000U | identities[i]));
+        auto pickup = legendsN64Pickup(nativePickup(key, amount, 0x840000U | kIdentities[i]));
         REQUIRE(pickup);
         CHECK(pickup->offer.kind == powerup::kSpecial);
-        CHECK(pickup->offer.flags == effects[i]);
+        CHECK(pickup->offer.flags == kEffects[i]);
         CHECK(pickup->offer.amount == amount);
         CHECK(pickup->offer.strength == -1);
         CharacterSave save;
@@ -179,14 +179,14 @@ TEST_CASE("native Skorne equipment retains charged GDL equipment mechanics",
         CHECK(save.progress().armorAdd == armor);
         auto& inventory = save.progress().inventory;
         REQUIRE(inventory.powerupCount() == 1);
-        CHECK((PowerupEffects::of(inventory).special & effects[i]) != 0);
+        CHECK((PowerupEffects::of(inventory).special & kEffects[i]) != 0);
         inventory.advance(60);
         CHECK(inventory.powerups[0].strength == -1);
-        REQUIRE(inventory.spendPowerup(powerup::kSpecial, effects[i]));
+        REQUIRE(inventory.spendPowerup(powerup::kSpecial, kEffects[i]));
         CHECK(inventory.powerups[0].charge == amount - 1);
         CHECK_FALSE(
-            legendsN64Pickup(nativePickup(key, amount, 0x840000U | identities[(i + 1) % 4])));
-        CHECK_FALSE(legendsN64Pickup(nativePickup(key, amount, identities[i])));
+            legendsN64Pickup(nativePickup(key, amount, 0x840000U | kIdentities[(i + 1) % 4])));
+        CHECK_FALSE(legendsN64Pickup(nativePickup(key, amount, kIdentities[i])));
     }
 }
 
@@ -215,7 +215,8 @@ TEST_CASE("N64 native obelisk contact grants a persistent shared bit and leaves 
     CHECK(pickup->staysVisible);
     CHECK(touchesLegendsPickup(*pickup, {12.5f, 20, 30}, .5f, 1));
     CHECK_FALSE(touchesLegendsPickup(*pickup, {12.6f, 20, 30}, .5f, 1));
-    CharacterSave collector, other;
+    CharacterSave collector;
+    CharacterSave other;
     const std::array<CharacterSave*, 1> party{&other};
     CHECK(takeLegendsPickup(*pickup, LegendsPlatform::N64, collector, 1, true, party).took());
     CHECK(collector.progress().legendsProgress(LegendsPlatform::N64).obelisks == 0x20);

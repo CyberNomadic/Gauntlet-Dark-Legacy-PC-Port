@@ -16,8 +16,8 @@ using namespace gdl;
 using namespace gdl::game;
 using Catch::Approx;
 
-constexpr std::array kSources{BlowSource::Swing,  BlowSource::Shot,   BlowSource::SuperShot,
-                              BlowSource::Potion, BlowSource::Turbo,  BlowSource::Charge,
+constexpr std::array kSources{BlowSource::Swing,  BlowSource::Shot,  BlowSource::SuperShot,
+                              BlowSource::Potion, BlowSource::Turbo, BlowSource::Charge,
                               BlowSource::Breath, BlowSource::Shield};
 constexpr std::array kOutcomes{BlowOutcome::Hurt, BlowOutcome::Killed, BlowOutcome::Destroyed};
 
@@ -33,8 +33,7 @@ TEST_CASE("out of Aggressor Mode the original's rules stand: swings alone count,
     for (const BlowSource source : kSources) {
         for (const BlowOutcome outcome : kOutcomes) {
             CAPTURE(static_cast<int>(source), static_cast<int>(outcome));
-            const bool original =
-                source == BlowSource::Swing && outcome != BlowOutcome::Destroyed;
+            const bool original = source == BlowSource::Swing && outcome != BlowOutcome::Destroyed;
             CHECK(off.runEffect(source, outcome, players[0], players) ==
                   (original ? RunEffect::CountAsOriginal : RunEffect::Nothing));
         }
@@ -69,11 +68,11 @@ TEST_CASE("in Aggressor Mode a kill or a generator destroyed counts one, nothing
     // Three seconds at D, three eighths less a grade, one and a half at S.
     CHECK(on.quietWindow(0) == StreakGrades::kLongestQuiet);
     CHECK(on.quietWindow(1) == StreakGrades::kLongestQuiet);
-    CHECK(on.quietWindow(74) == StreakGrades::kLongestQuiet);
-    CHECK(on.quietWindow(75) == Approx(2.625f));
-    CHECK(on.quietWindow(150) == Approx(2.25f));
-    CHECK(on.quietWindow(225) == Approx(1.875f));
-    CHECK(on.quietWindow(300) == StreakGrades::kShortestQuiet);
+    CHECK(on.quietWindow(StreakGrades::kCounts[1] - 1) == StreakGrades::kLongestQuiet);
+    CHECK(on.quietWindow(StreakGrades::kCounts[1]) == Approx(2.625f));
+    CHECK(on.quietWindow(StreakGrades::kCounts[2]) == Approx(2.25f));
+    CHECK(on.quietWindow(StreakGrades::kCounts[3]) == Approx(1.875f));
+    CHECK(on.quietWindow(StreakGrades::kTop) == StreakGrades::kShortestQuiet);
     CHECK(on.quietWindow(1000) == StreakGrades::kShortestQuiet);
     CHECK(StreakGrades::kLongestQuiet == MeleeStreak::kQuiet); // the longest a run survives
     MechanicsFacade switched;
@@ -93,8 +92,8 @@ TEST_CASE("kills under time stop, invulnerability or invisibility count nothing"
     REQUIRE(on.runEffect(BlowSource::Shot, BlowOutcome::Killed, players[1], players) ==
             RunEffect::Count);
     // Invulnerable, the first earns nothing; the second is not affected.
-    players[0].actor.save().progress().inventory.addPowerup(powerup::kArmor,
-                                                            powerup::kInvulnerable, 0, 1);
+    players[0].actor.save().progress().inventory.addPowerup(powerup::kArmor, powerup::kInvulnerable,
+                                                            0, 1);
     CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, players[0], players) ==
           RunEffect::Nothing);
     CHECK(on.runEffect(BlowSource::Swing, BlowOutcome::Killed, players[1], players) ==

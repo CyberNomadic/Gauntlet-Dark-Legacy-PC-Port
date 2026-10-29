@@ -30,7 +30,7 @@ public:
         std::string_view sumner;
         std::string_view podium;
     };
-    std::string_view initialSequence() const { return "LKDN"; }
+    static std::string_view initialSequence() { return "LKDN"; }
     std::optional<Cue> update(bool finished, u16 random15);
 
 private:

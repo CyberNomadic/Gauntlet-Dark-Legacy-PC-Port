@@ -217,7 +217,7 @@ TEST_CASE("Native Tower exit artwork activates before party-wide travel without 
     test::FakeRenderDevice device;
     auto scene = LegendsSceneAdapter::load(device, LegendsPlatform::N64, directory, map, 2);
     REQUIRE(scene->portals().size() == 24);
-    CharacterSave saved;
+    const CharacterSave saved;
     const std::array<const CharacterSave*, 1> party{&saved};
     scene->synchronizeProgress(party);
     const auto& portal = scene->portals()[5]; // open Mountain realm's first exit
